@@ -1,0 +1,85 @@
+# KurrentScholar
+
+KurrentScholar is an offline-first desktop application for transcribing scanned historical German
+Kurrent handwriting. It keeps manuscripts and research notes on your computer, shows detected source
+lines beside editable transcriptions, and marks model uncertainty without presenting it as verified
+accuracy.
+
+> **No Python installation, programming knowledge, API key, account, or paid AI subscription is
+> required for released installers.**
+
+## Download
+
+The project is **pre-release**. No tested public installer or genuine application screenshot exists yet;
+do not treat the CI configuration as a release artifact. When the first Windows build passes clean-machine
+acceptance testing, it will be linked from the repository's GitHub Releases page.
+
+Planned first platform: Windows 10/11 x64, CPU-only, approximately 4 GB application storage plus a
+separate one-time 1.34 GB model download. At least 8 GB RAM is the provisional development target, not
+yet a measured published requirement.
+
+## Intended workflow
+
+1. Download and open the Windows installer from GitHub Releases.
+2. Follow the ordinary per-user installation steps and launch KurrentScholar.
+3. Confirm the one-time handwriting-model download (1,340,570,347 required bytes at the pinned revision).
+4. Open a historical PDF, PNG, JPEG, or TIFF and create a local research project.
+5. Select **Transcribe**. The page is segmented into lines; only line crops reach TrOCR.
+6. Compare source-line overlays with the editable text and review uncertain passages.
+7. Save and reopen the SQLite project; export corrected or original machine text.
+
+No manuscript is uploaded. Network access occurs only when the user starts model installation. The
+checkpoint is [dh-unibe/trocr-kurrent](https://huggingface.co/dh-unibe/trocr-kurrent), pinned to commit
+`2882072ac68f7aa09353a71092ebd5510f4b82cd`; ordinary recognition then forces local-only loading.
+
+## Current functionality
+
+- Incremental PDF/image rendering and horizontal line segmentation with source coordinates.
+- Real local TrOCR inference using safetensors, CPU fallback, beam transition scores, and truncation flags.
+- Native two-panel Qt review UI, background transcription, cancellation, autosave, line overlays, manual
+  correction and verification.
+- Schema-versioned SQLite projects preserving immutable machine output separately from edited text.
+- UTF-8 text, Word, formula-safe CSV, and provenance-rich JSON exports.
+- CER/WER evaluation utility and unit tests; Windows build/installer workflow.
+
+The included OpenCV segmenter is a packageable fallback for predominantly horizontal, single-column
+pages. It is not equivalent to a validated learned historical-layout model and may miss marginalia,
+columns, curves, tables, or crossed text. Missed handwriting and confident recognition errors remain
+possible. See [the current plan](PLAN.md) before using this pre-release software for research.
+
+## Running from source (developers)
+
+Install `uv`, then on Windows:
+
+```powershell
+uv sync --extra dev
+uv run kurrentscholar
+uv run pytest -m "not real_model"
+```
+
+The first model installation needs internet access. Real-model tests are opt-in and are never evidence
+until their actual result is recorded. Build instructions are in [INSTALLATION.md](docs/INSTALLATION.md).
+
+## Citation and acknowledgement
+
+### Citing KurrentScholar
+
+If you use KurrentScholar in research, cite the exact software release. Publication metadata in
+`CITATION.cff` is intentionally placeholder-only until supplied by the maintainer.
+
+### Citing the underlying recognition model
+
+KurrentScholar uses the independently developed University of Bern TrOCR Kurrent model by Jonas Widmer
+and Tobias Hodel in conjunction with the researchers and institutions acknowledged in its model card.
+KurrentScholar did not develop or train it. Cite the [model repository](https://huggingface.co/dh-unibe/trocr-kurrent)
+and [model DOI](https://doi.org/10.57967/hf/0442) separately.
+
+The upstream model card reports line-level results on its own nineteenth-century data and warns that the
+model has not been extensively tested. Those figures must not be generalized to other scripts, periods,
+page segmentation, or archival conditions.
+
+## License
+
+Original KurrentScholar code is MIT-licensed. Third-party components retain their own licenses; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). A final bundled-binary license audit is a release gate.
+

@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use KurrentScholar, cite the software release and the underlying TrOCR Kurrent model separately."
+title: "KurrentScholar"
+type: software
+version: "0.1.0-dev"
+date-released: "2026-11-19"
+authors:
+  - family-names: "TO BE PROVIDED"
+    given-names: "Maintainer"
+repository-code: "https://github.com/TO-BE-PROVIDED/KurrentScholar"
+url: "https://github.com/TO-BE-PROVIDED/KurrentScholar"
+license: MIT
+identifiers:
+  - type: other
+    value: "SOFTWARE-DOI-TO-BE-PROVIDED"
+    description: "Replace after archiving a versioned release"
+preferred-citation:
+  type: software
+  title: "KurrentScholar"
+  authors:
+    - family-names: "TO BE PROVIDED"
+      given-names: "Maintainer"
+  version: "0.1.0-dev"
+  year: 2026
+

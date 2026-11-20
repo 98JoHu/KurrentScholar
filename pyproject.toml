@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kurrentscholar"
+version = "0.1.0.dev0"
+description = "Offline-first desktop transcription for historical German Kurrent manuscripts"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = {file = "LICENSE"}
+authors = [{name = "KurrentScholar contributors"}]
+dependencies = [
+  "huggingface-hub==0.28.1",
+  "numpy==1.26.4",
+  "opencv-python-headless==4.10.0.84",
+  "pillow==11.1.0",
+  "platformdirs==4.3.6",
+  "pypdfium2==4.30.0",
+  "pyside6==6.8.2.1",
+  "python-docx==1.1.2",
+  "safetensors==0.5.2",
+  "torch==2.5.1",
+  "transformers==4.48.3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "coverage[toml]==7.6.10",
+  "pyinstaller==6.11.1",
+  "pytest==8.3.4",
+  "pytest-qt==4.4.0",
+  "ruff==0.9.3",
+]
+
+[project.scripts]
+kurrentscholar = "kurrentscholar.app:main"
+kurrentscholar-evaluate = "kurrentscholar.evaluation:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kurrentscholar"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["real_model: downloads/loads the pinned model", "gui: requires Qt"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["E501", "S101"]
+

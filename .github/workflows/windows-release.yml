@@ -1,0 +1,42 @@
+name: Windows release artifact
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.5.24"
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --extra dev --frozen
+      - run: uv run pytest -m "not real_model"
+      - run: uv run pyinstaller packaging/windows/KurrentScholar.spec --noconfirm --clean
+      - name: Executable startup smoke test
+        shell: pwsh
+        run: .\dist\KurrentScholar\KurrentScholar.exe --smoke-test
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\windows\KurrentScholar.iss'
+      - name: Calculate checksum
+        shell: pwsh
+        run: '(Get-FileHash dist\installer\KurrentScholar-Setup-Windows-x64.exe -Algorithm SHA256).Hash + "  KurrentScholar-Setup-Windows-x64.exe" | Set-Content -Encoding ascii dist\installer\SHA256SUMS.txt'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KurrentScholar-Windows-x64-unsigned
+          path: |
+            dist/installer/KurrentScholar-Setup-Windows-x64.exe
+            dist/installer/SHA256SUMS.txt
+          if-no-files-found: error
+

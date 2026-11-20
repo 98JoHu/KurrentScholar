@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
+import threading
 import traceback
 from pathlib import Path
 
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import QObject, QRectF, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QRectF, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -27,7 +29,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from kurrentscholar.constants import MODEL_ID, MODEL_REVISION
+from kurrentscholar import __version__
+from kurrentscholar.constants import APP_NAME, MODEL_ID, MODEL_REQUIRED_BYTES, MODEL_REVISION
+from kurrentscholar.diagnostics import log_path
 from kurrentscholar.document_processing import DocumentRenderer
 from kurrentscholar.domain import ConfidenceThresholds, ReviewStatus
 from kurrentscholar.exports import ExportOptions, export_csv, export_docx, export_json, export_text
@@ -35,10 +39,12 @@ from kurrentscholar.projects import ProjectDatabase
 from kurrentscholar.recognition import ModelManager, TrOCRBackend
 from kurrentscholar.segmentation import ProjectionSegmenter
 
+LOGGER = logging.getLogger(f"{APP_NAME}.ui")
+
 
 class ProcessingWorker(QObject):
     progress = Signal(int, int, str)
-    finished = Signal()
+    finished = Signal(bool)
     failed = Signal(str, str)
 
     def __init__(self, project_path: Path, pages: list[int], model_path: Path, dpi: int = 300) -> None:
@@ -47,7 +53,7 @@ class ProcessingWorker(QObject):
         self.pages = pages
         self.model_path = model_path
         self.dpi = dpi
-        self.cancelled = False
+        self.cancel_event = threading.Event()
 
     @Slot()
     def run(self) -> None:
@@ -68,7 +74,7 @@ class ProcessingWorker(QObject):
                 })
                 total = len(self.pages)
                 for position, page_index in enumerate(self.pages, start=1):
-                    if self.cancelled:
+                    if self.cancel_event.is_set():
                         break
                     self.progress.emit(position - 1, total, f"Rendering page {page_index + 1}")
                     rendered = renderer.render(document["source_path"], page_index, self.dpi)
@@ -77,9 +83,15 @@ class ProcessingWorker(QObject):
                     error = None if lines else "No handwriting lines were detected; review this page manually."
                     project.upsert_page(page_index + 1, rendered.image.width, rendered.image.height,
                                         self.dpi, status=status, error=error)
+                    existing = {
+                        line.reading_order: line for line in project.lines(page_index + 1)
+                    }
                     for line_number, detected in enumerate(lines):
-                        if self.cancelled:
+                        if self.cancel_event.is_set():
                             break
+                        prior = existing.get(detected.reading_order)
+                        if prior and (prior.machine_text or prior.corrected_text is not None):
+                            continue
                         self.progress.emit(position - 1, total,
                                            f"Page {page_index + 1}: line {line_number + 1}/{len(lines)}")
                         box = detected.bbox
@@ -93,13 +105,12 @@ class ProcessingWorker(QObject):
                             project.add_line(page_index + 1, detected.reading_order, box, "", None, [], [],
                                              recognition_error=str(error))
                     self.progress.emit(position, total, f"Saved page {page_index + 1}")
-            self.finished.emit()
+            self.finished.emit(self.cancel_event.is_set())
         except Exception as error:
             self.failed.emit(str(error), traceback.format_exc())
 
-    @Slot()
-    def cancel(self) -> None:
-        self.cancelled = True
+    def request_cancel(self) -> None:
+        self.cancel_event.set()
 
 
 class ModelInstallWorker(QObject):
@@ -121,7 +132,7 @@ class ModelInstallWorker(QObject):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, offer_model_on_startup: bool = True) -> None:
         super().__init__()
         self.setWindowTitle("KurrentScholar")
         self.resize(1280, 800)
@@ -132,15 +143,27 @@ class MainWindow(QMainWindow):
         self.project_path: Path | None = None
         self.current_page = 1
         self.current_line_id: int | None = None
+        self.current_line_text: str | None = None
         self.thresholds = ConfidenceThresholds()
         self._thread: QThread | None = None
         self._worker: ProcessingWorker | None = None
         self._install_thread: QThread | None = None
         self._install_worker: ModelInstallWorker | None = None
+        self._install_progress: QProgressDialog | None = None
+        self._install_progress_timer: QTimer | None = None
+        self._edit_timer = QTimer(self)
+        self._edit_timer.setSingleShot(True)
+        self._edit_timer.setInterval(700)
+        self._edit_timer.timeout.connect(self.save_current_edit)
+        self._display_scale_x = 1.0
+        self._display_scale_y = 1.0
+        self.actions: dict[str, QAction] = {}
         self._overlays: list[QGraphicsRectItem] = []
         self._build_ui()
         self._build_actions()
         self._show_welcome_status()
+        if offer_model_on_startup and not self.model_manager.status().installed:
+            QTimer.singleShot(150, self._offer_model_installation)
 
     def _build_ui(self) -> None:
         self.scene = QGraphicsScene(self)
@@ -154,7 +177,7 @@ class MainWindow(QMainWindow):
         self.line_list.currentItemChanged.connect(self._select_line)
         self.editor = QTextEdit()
         self.editor.setPlaceholderText("Select a line to review or correct its transcription.")
-        self.editor.textChanged.connect(self._autosave_edit)
+        self.editor.textChanged.connect(self._schedule_autosave)
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
         verify = QPushButton("Mark selected line as verified")
@@ -184,6 +207,8 @@ class MainWindow(QMainWindow):
         actions = [
             ("Open document", self.open_document, QKeySequence.Open),
             ("Open project", self.open_project, None),
+            ("Previous page", lambda: self._change_page(-1), None),
+            ("Next page", lambda: self._change_page(1), None),
             ("Transcribe", self.transcribe, None),
             ("Save", self.save_current_edit, QKeySequence.Save),
             ("Export", self.export_project, None),
@@ -198,6 +223,29 @@ class MainWindow(QMainWindow):
             if shortcut:
                 action.setShortcut(shortcut)
             toolbar.addAction(action)
+            self.actions[text] = action
+        self._update_navigation_actions()
+
+    def _update_navigation_actions(self) -> None:
+        document = self.project.document() if self.project else None
+        page_count = int(document["page_count"]) if document else 0
+        self.actions["Previous page"].setEnabled(self.current_page > 1)
+        self.actions["Next page"].setEnabled(0 < self.current_page < page_count)
+
+    def _change_page(self, change: int) -> None:
+        if not self.project:
+            return
+        document = self.project.document()
+        if not document:
+            return
+        target = self.current_page + change
+        if not 1 <= target <= document["page_count"]:
+            return
+        self.save_current_edit()
+        self.current_page = target
+        self._render_page()
+        self._refresh_lines()
+        self.status_label.setText(f"Page {self.current_page} of {document['page_count']}.")
 
     def _show_welcome_status(self) -> None:
         status = self.model_manager.status()
@@ -207,6 +255,26 @@ class MainWindow(QMainWindow):
             text = ("Welcome. The separate 1.34 GB handwriting model is not installed. Choose ‘Install model’ "
                     "once while online; documents are never uploaded and later transcription is offline.")
         self.status_label.setText(text)
+
+    def _offer_model_installation(self) -> None:
+        if self.model_manager.status().installed or (
+            self._install_thread and self._install_thread.isRunning()
+        ):
+            return
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Information)
+        dialog.setWindowTitle("Handwriting model required")
+        dialog.setText("Install the handwriting model now?")
+        dialog.setInformativeText(
+            "KurrentScholar cannot transcribe documents until this separate model is installed. "
+            "The one-time download is about 1.34 GB and requires an internet connection. "
+            "Your documents are not uploaded, and transcription works offline afterward."
+        )
+        dialog.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        dialog.button(QMessageBox.Yes).setText("Install model")
+        dialog.button(QMessageBox.No).setText("Not now")
+        if dialog.exec() == QMessageBox.Yes:
+            self._start_model_installation()
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
@@ -239,15 +307,22 @@ class MainWindow(QMainWindow):
         )
         if not destination:
             return
-        if self.project:
-            self.project.close()
-        self.project_path = Path(destination)
-        self.project = ProjectDatabase(self.project_path, create=True)
-        self.project.set_document(source, page_count)
-        self.current_page = 1
-        self._render_page()
-        self._refresh_lines()
-        self.status_label.setText(f"Project created. {page_count} page(s). Choose Transcribe when ready.")
+        try:
+            project_path = Path(destination)
+            new_project = ProjectDatabase(project_path, create=True, overwrite=True)
+            new_project.set_document(source, page_count)
+            if self.project:
+                self.project.close()
+            self.project_path = project_path
+            self.project = new_project
+            self.current_page = 1
+            self._render_page()
+            self._refresh_lines()
+            self.status_label.setText(
+                f"Project created. Page 1 of {page_count}. Choose Transcribe when ready."
+            )
+        except Exception as error:
+            self._error("The project could not be created", str(error), traceback.format_exc())
 
     @Slot()
     def open_project(self) -> None:
@@ -256,19 +331,24 @@ class MainWindow(QMainWindow):
             self._load_project(Path(filename))
 
     def _load_project(self, path: Path) -> None:
+        new_project: ProjectDatabase | None = None
         try:
-            if self.project:
-                self.project.close()
-            self.project = ProjectDatabase(path)
-            self.project_path = path
-            document = self.project.document()
+            new_project = ProjectDatabase(path)
+            document = new_project.document()
             if not document or not Path(document["source_path"]).is_file():
                 raise FileNotFoundError("The original document is missing. Relinking is not implemented yet.")
+            if self.project:
+                self.project.close()
+            self.project = new_project
+            new_project = None
+            self.project_path = path
             self.current_page = 1
             self._render_page()
             self._refresh_lines()
             self.status_label.setText(f"Opened {path.name}")
         except Exception as error:
+            if new_project:
+                new_project.close()
             self._error("The project could not be opened", str(error))
 
     def _render_page(self) -> None:
@@ -278,13 +358,26 @@ class MainWindow(QMainWindow):
         if not document:
             return
         rendered = self.renderer.render(document["source_path"], self.current_page - 1, dpi=150)
+        page = self.project.page(self.current_page)
+        if page:
+            self._display_scale_x = rendered.image.width / page["width"]
+            self._display_scale_y = rendered.image.height / page["height"]
+        else:
+            self._display_scale_x = self._display_scale_y = 1.0
         qt_image = ImageQt(rendered.image)
         self.pixmap_item.setPixmap(QPixmap.fromImage(qt_image))
         self.scene.setSceneRect(QRectF(self.pixmap_item.boundingRect()))
         self.viewer.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+        self._update_navigation_actions()
 
     def _refresh_lines(self) -> None:
         self.line_list.blockSignals(True)
+        self._edit_timer.stop()
+        self.current_line_id = None
+        self.current_line_text = None
+        self.editor.blockSignals(True)
+        self.editor.clear()
+        self.editor.blockSignals(False)
         self.line_list.clear()
         for overlay in self._overlays:
             self.scene.removeItem(overlay)
@@ -302,7 +395,12 @@ class MainWindow(QMainWindow):
                     item.setBackground(QBrush(QColor(color)))
                 self.line_list.addItem(item)
                 box = line.bbox
-                rect = QGraphicsRectItem(box.x / 2, box.y / 2, box.width / 2, box.height / 2)
+                rect = QGraphicsRectItem(
+                    box.x * self._display_scale_x,
+                    box.y * self._display_scale_y,
+                    box.width * self._display_scale_x,
+                    box.height * self._display_scale_y,
+                )
                 rect.setPen(QPen(QColor("#2d6cdf"), 2))
                 rect.setData(0, line.id)
                 self.scene.addItem(rect)
@@ -319,6 +417,9 @@ class MainWindow(QMainWindow):
             self._error("The handwriting model is not installed", "Choose Install model and retry.")
             return
         document = self.project.document()
+        if not document:
+            self._error("The project is incomplete", "No source document is recorded.")
+            return
         pages = list(range(document["page_count"]))
         self.project.close()
         self.project = None
@@ -328,29 +429,56 @@ class MainWindow(QMainWindow):
         self._thread.started.connect(self._worker.run)
         progress = QProgressDialog("Preparing transcription…", "Cancel", 0, len(pages), self)
         progress.setWindowModality(Qt.WindowModal)
-        progress.canceled.connect(self._worker.cancel)
+        progress.setAutoClose(False)
+        progress.canceled.connect(lambda: self._request_processing_cancel(progress))
         self._worker.progress.connect(lambda value, maximum, text: (
             progress.setMaximum(maximum), progress.setValue(value), progress.setLabelText(text)
         ))
-        self._worker.finished.connect(lambda: self._processing_done(progress))
+        self._worker.finished.connect(lambda cancelled: self._processing_done(progress, cancelled))
         self._worker.failed.connect(lambda message, details: self._processing_failed(progress, message, details))
         self._worker.finished.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
+        self._set_processing_busy(True)
         self._thread.start()
 
-    def _processing_done(self, progress: QProgressDialog) -> None:
+    def _request_processing_cancel(self, progress: QProgressDialog) -> None:
+        if self._worker:
+            self._worker.request_cancel()
+        progress.setLabelText("Stopping safely after the current line…")
+        progress.setCancelButton(None)
+        progress.show()
+
+    def _processing_done(self, progress: QProgressDialog, cancelled: bool) -> None:
         progress.close()
         self.project = ProjectDatabase(self.project_path)
+        self._render_page()
         self._refresh_lines()
-        self.status_label.setText("Transcription stopped or completed; all completed lines were saved.")
+        self._set_processing_busy(False)
+        if cancelled:
+            self.status_label.setText("Transcription cancelled safely; completed lines were saved.")
+        else:
+            self.status_label.setText("Transcription completed; all results were saved.")
 
     def _processing_failed(self, progress: QProgressDialog, message: str, details: str) -> None:
         progress.close()
         self.project = ProjectDatabase(self.project_path)
+        self._set_processing_busy(False)
+        LOGGER.error("Transcription failed: %s\n%s", message, details)
         self._error("Transcription could not continue", message, details)
+
+    def _set_processing_busy(self, busy: bool) -> None:
+        for name in ("Open document", "Open project", "Transcribe", "Export"):
+            self.actions[name].setEnabled(not busy)
 
     @Slot()
     def install_model(self) -> None:
+        if self.model_manager.status().installed:
+            QMessageBox.information(
+                self,
+                "Handwriting model installed",
+                "The pinned handwriting model is already installed and verified.",
+            )
+            return
         answer = QMessageBox.question(
             self,
             "Install handwriting model",
@@ -359,12 +487,27 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
-        progress = QProgressDialog("Starting model download…", "Hide", 0, 0, self)
+        self._start_model_installation()
+
+    def _start_model_installation(self) -> None:
+        if self._install_thread and self._install_thread.isRunning():
+            if self._install_progress:
+                self._install_progress.show()
+                self._install_progress.raise_()
+            return
+        self.actions["Install model"].setEnabled(False)
+        progress = QProgressDialog("Starting model download…", "Hide", 0, 1000, self)
         progress.setWindowTitle("Installing handwriting model")
         progress.setWindowModality(Qt.NonModal)
         progress.setAutoClose(False)
+        progress.setValue(0)
         progress.canceled.connect(progress.hide)
         progress.show()
+        self._install_progress = progress
+        self._install_progress_timer = QTimer(self)
+        self._install_progress_timer.setInterval(500)
+        self._install_progress_timer.timeout.connect(self._update_model_download_progress)
+        self._install_progress_timer.start()
         self._install_thread = QThread(self)
         self._install_worker = ModelInstallWorker(self.model_manager)
         self._install_worker.moveToThread(self._install_thread)
@@ -379,17 +522,46 @@ class MainWindow(QMainWindow):
         self._install_thread.start()
 
     def _model_install_done(self, progress: QProgressDialog) -> None:
+        if self._install_progress_timer:
+            self._install_progress_timer.stop()
+        progress.setValue(progress.maximum())
         progress.close()
+        self._install_progress = None
+        self.actions["Install model"].setEnabled(True)
         self.status_label.setText("Handwriting model installed and ready for offline use.")
+        QMessageBox.information(
+            self,
+            "Model installation complete",
+            "The handwriting model was downloaded, verified, and is ready. "
+            "Transcription can now run without an internet connection.",
+        )
 
     def _model_install_failed(
         self, progress: QProgressDialog, message: str, details: str
     ) -> None:
+        if self._install_progress_timer:
+            self._install_progress_timer.stop()
         progress.close()
+        self._install_progress = None
+        self.actions["Install model"].setEnabled(True)
+        LOGGER.error("Model installation failed: %s\n%s", message, details)
         self._error(
             "The model installation did not finish",
-            f"No project data was affected. {message}",
-            details,
+            f"No project data was affected. {message}\n\nYou can retry from the Install model button.",
+            f"Diagnostic log: {log_path()}\n\n{details}",
+        )
+
+    def _update_model_download_progress(self) -> None:
+        if not self._install_progress:
+            return
+        downloaded = self.model_manager.downloaded_bytes()
+        value = min(999, int(downloaded * 1000 / MODEL_REQUIRED_BYTES))
+        self._install_progress.setValue(value)
+        gib = downloaded / (1024 ** 3)
+        total_gib = MODEL_REQUIRED_BYTES / (1024 ** 3)
+        self._install_progress.setLabelText(
+            f"Downloading and verifying the handwriting model: {gib:.2f} of {total_gib:.2f} GiB. "
+            "Completed data is reused after interruptions."
         )
 
     def _select_line(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
@@ -398,6 +570,7 @@ class MainWindow(QMainWindow):
         self.save_current_edit()
         self.current_line_id = int(current.data(Qt.UserRole))
         line = next(item for item in self.project.lines(self.current_page) if item.id == self.current_line_id)
+        self.current_line_text = line.display_text
         self.editor.blockSignals(True)
         self.editor.setPlainText(line.display_text)
         self.editor.blockSignals(False)
@@ -405,13 +578,25 @@ class MainWindow(QMainWindow):
             selected = overlay.data(0) == line.id
             overlay.setBrush(QBrush(QColor(45, 108, 223, 60) if selected else QColor(0, 0, 0, 0)))
 
-    def _autosave_edit(self) -> None:
+    def _schedule_autosave(self) -> None:
         if self.current_line_id is not None and self.project:
-            self.project.correct_line(self.current_line_id, self.editor.toPlainText())
+            self._edit_timer.start()
 
     @Slot()
     def save_current_edit(self) -> None:
-        self._autosave_edit()
+        self._edit_timer.stop()
+        if self.current_line_id is None or not self.project:
+            return
+        text = self.editor.toPlainText()
+        if text == self.current_line_text:
+            return
+        if self.project.correct_line(self.current_line_id, text):
+            self.current_line_text = text
+            current = self.line_list.currentItem()
+            if current:
+                line = self.project.line(self.current_line_id)
+                label = self.thresholds.classify(line.confidence).value.replace("_", " ")
+                current.setText(f"{line.reading_order + 1:03d}  [{label}]  {line.display_text}")
 
     @Slot()
     def _verify_line(self) -> None:
@@ -455,7 +640,7 @@ class MainWindow(QMainWindow):
     def about(self) -> None:
         QMessageBox.about(
             self, "About KurrentScholar",
-            f"KurrentScholar 0.1.0.dev0\n\nOffline historical handwriting research assistant.\n\n"
+            f"KurrentScholar {__version__}\n\nOffline historical handwriting research assistant.\n\n"
             f"Recognition model: {MODEL_ID}\nRevision: {MODEL_REVISION}\nDOI: 10.57967/hf/0442\n"
             "Model developed by Jonas Widmer and Tobias Hodel with the institutions acknowledged upstream; "
             "KurrentScholar did not develop or train it. MIT-licensed application and model."

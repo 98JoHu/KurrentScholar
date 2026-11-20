@@ -1,20 +1,31 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
+import os
 import shutil
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
-
 from kurrentscholar.constants import (
+    APP_NAME,
+    MODEL_FILE_SIZES,
     MODEL_FILES,
     MODEL_ID,
     MODEL_REQUIRED_BYTES,
     MODEL_REVISION,
+    MODEL_SAFETENSORS_SHA256,
     default_data_dir,
 )
+
+LOGGER = logging.getLogger(f"{APP_NAME}.model_install")
+
+
+class ModelInstallError(RuntimeError):
+    """An actionable model installation failure."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +35,7 @@ class ModelStatus:
     revision: str
     bytes_required: int
     missing_files: tuple[str, ...] = ()
+    invalid_files: tuple[str, ...] = ()
 
 
 class ModelManager:
@@ -32,38 +44,164 @@ class ModelManager:
 
     def status(self) -> ModelStatus:
         missing = tuple(name for name in MODEL_FILES if not (self.root / name).is_file())
+        invalid = tuple(
+            name
+            for name, expected in MODEL_FILE_SIZES.items()
+            if (self.root / name).is_file() and (self.root / name).stat().st_size != expected
+        )
         manifest_ok = False
         try:
             manifest = json.loads((self.root / "kurrentscholar-model.json").read_text("utf-8"))
-            manifest_ok = manifest.get("revision") == MODEL_REVISION
+            manifest_ok = (
+                manifest.get("revision") == MODEL_REVISION
+                and manifest.get("model_safetensors_sha256") == MODEL_SAFETENSORS_SHA256
+            )
         except (OSError, ValueError):
             pass
-        return ModelStatus(not missing and manifest_ok, self.root, MODEL_REVISION, MODEL_REQUIRED_BYTES, missing)
+        return ModelStatus(
+            not missing and not invalid and manifest_ok,
+            self.root,
+            MODEL_REVISION,
+            MODEL_REQUIRED_BYTES,
+            missing,
+            invalid,
+        )
 
     def check_disk_space(self) -> bool:
         self.root.parent.mkdir(parents=True, exist_ok=True)
-        return shutil.disk_usage(self.root.parent).free >= MODEL_REQUIRED_BYTES + 512 * 1024 * 1024
+        remaining = max(0, MODEL_REQUIRED_BYTES - self.downloaded_bytes())
+        return shutil.disk_usage(self.root.parent).free >= remaining + 512 * 1024 * 1024
+
+    def downloaded_bytes(self) -> int:
+        completed = sum(
+            min((self.root / name).stat().st_size, expected)
+            for name, expected in MODEL_FILE_SIZES.items()
+            if (self.root / name).is_file()
+        )
+        partial = 0
+        cache = self.root / ".cache"
+        if cache.is_dir():
+            try:
+                partial = sum(
+                    item.stat().st_size
+                    for item in cache.rglob("*.incomplete")
+                    if item.is_file()
+                )
+            except OSError:
+                pass
+        return min(MODEL_REQUIRED_BYTES, completed + partial)
 
     def install(self, progress: Callable[[str], None] | None = None) -> Path:
         if not self.check_disk_space():
-            raise OSError("At least 1.8 GB of free space is required for the model and download cache")
+            raise ModelInstallError(
+                "At least 1.8 GB of free disk space is required for the model and download cache."
+            )
         self.root.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        os.environ.setdefault("DO_NOT_TRACK", "1")
+        os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
+        from huggingface_hub import snapshot_download
+        from huggingface_hub.utils import disable_progress_bars
+
+        disable_progress_bars()
+
+        LOGGER.info("Installing %s at revision %s into %s", MODEL_ID, MODEL_REVISION, self.root)
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                if progress:
+                    progress(
+                        "Downloading the pinned handwriting model "
+                        f"(attempt {attempt}/3). Interrupted downloads resume automatically."
+                    )
+                snapshot_download(
+                    repo_id=MODEL_ID,
+                    revision=MODEL_REVISION,
+                    local_dir=self.root,
+                    allow_patterns=list(MODEL_FILES),
+                    max_workers=2,
+                )
+                last_error = None
+                break
+            except Exception as error:
+                last_error = error
+                LOGGER.exception("Model download attempt %s failed", attempt)
+                if attempt < 3:
+                    if progress:
+                        progress(f"Download attempt {attempt} failed; retrying shortly…")
+                    time.sleep(2 ** (attempt - 1))
+        if last_error is not None:
+            raise ModelInstallError(self._friendly_download_error(last_error)) from last_error
+
         if progress:
-            progress("Downloading the pinned model files")
-        snapshot_download(
-            repo_id=MODEL_ID,
-            revision=MODEL_REVISION,
-            local_dir=self.root,
-            allow_patterns=list(MODEL_FILES),
-        )
-        missing = [name for name in MODEL_FILES if not (self.root / name).is_file()]
-        if missing:
-            raise OSError(f"Model download is incomplete: {', '.join(missing)}")
+            progress("Verifying downloaded model files…")
+        status = self.status()
+        if status.missing_files or status.invalid_files:
+            details = []
+            if status.missing_files:
+                details.append("missing: " + ", ".join(status.missing_files))
+            if status.invalid_files:
+                details.append("wrong size: " + ", ".join(status.invalid_files))
+                for name in status.invalid_files:
+                    # Remove only known managed files so the next attempt cannot
+                    # mistake a truncated file for a completed download.
+                    (self.root / name).unlink(missing_ok=True)
+            raise ModelInstallError("The model download is incomplete (" + "; ".join(details) + ").")
+        actual_hash = self._sha256(self.root / "model.safetensors")
+        if actual_hash != MODEL_SAFETENSORS_SHA256:
+            LOGGER.error("Safetensors checksum mismatch: %s", actual_hash)
+            # Hugging Face Hub will fetch the file again on the next retry when
+            # the corrupt destination is absent; its resumable cache is retained.
+            (self.root / "model.safetensors").unlink(missing_ok=True)
+            raise ModelInstallError(
+                "The downloaded model failed its integrity check. Retry the installation; "
+                "if it fails again, see the diagnostic log."
+            )
         (self.root / "kurrentscholar-model.json").write_text(
-            json.dumps({"model_id": MODEL_ID, "revision": MODEL_REVISION, "files": MODEL_FILES}, indent=2),
+            json.dumps(
+                {
+                    "model_id": MODEL_ID,
+                    "revision": MODEL_REVISION,
+                    "files": MODEL_FILE_SIZES,
+                    "model_safetensors_sha256": MODEL_SAFETENSORS_SHA256,
+                },
+                indent=2,
+            ),
             encoding="utf-8",
         )
+        LOGGER.info("Model installation completed and verified")
         return self.root
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _friendly_download_error(error: Exception) -> str:
+        message = str(error).strip() or error.__class__.__name__
+        lowered = message.lower()
+        if "certificate" in lowered or "ssl" in lowered:
+            return (
+                "A secure connection to Hugging Face could not be established. Check the computer's "
+                "date/time, HTTPS-inspecting antivirus or institutional proxy, then retry. "
+                f"Technical cause: {message}"
+            )
+        if "permission" in lowered or "access is denied" in lowered:
+            return (
+                "KurrentScholar cannot write to its model folder. Check folder permissions and retry. "
+                f"Technical cause: {message}"
+            )
+        if "timed out" in lowered or "connection" in lowered or "network" in lowered:
+            return (
+                "The model server could not be reached. Check the internet connection, VPN, firewall, "
+                f"or institutional proxy and retry. Technical cause: {message}"
+            )
+        return f"The model download failed after three attempts. Technical cause: {message}"
 
     def remove(self) -> None:
         marker = self.root / "kurrentscholar-model.json"

@@ -1,5 +1,5 @@
 #define MyAppName "KurrentScholar"
-#define MyAppVersion "0.1.0-dev"
+#define MyAppVersion "0.1.1-dev"
 #define MyAppPublisher "KurrentScholar contributors"
 #define MyAppExeName "KurrentScholar.exe"
 
@@ -33,6 +33,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 Source: "..\..\dist\KurrentScholar\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\KurrentScholar"; Filename: "{app}\{#MyAppExeName}"
@@ -40,8 +41,3 @@ Name: "{autodesktop}\KurrentScholar"; Filename: "{app}\{#MyAppExeName}"; Tasks: 
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,KurrentScholar}"; Flags: nowait postinstall skipifsilent
-
-[UninstallDelete]
-; Deliberately do not remove user projects or the separately managed model cache.
-Type: filesandordirs; Name: "{app}"
-

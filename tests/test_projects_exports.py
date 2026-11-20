@@ -29,6 +29,40 @@ def test_project_preserves_machine_output_and_history(tmp_path):
         assert line.review_status == "verified"
 
 
+def test_identical_edit_is_not_added_to_history(tmp_path):
+    _, project, line_id = make_project(tmp_path)
+    assert not project.correct_line(line_id, "=machine")
+    assert project.connection.execute("SELECT COUNT(*) FROM correction_history").fetchone()[0] == 0
+    assert project.correct_line(line_id, "corrected")
+    assert not project.correct_line(line_id, "corrected")
+    assert project.connection.execute("SELECT COUNT(*) FROM correction_history").fetchone()[0] == 1
+    project.close()
+
+
+def test_reprocessing_does_not_replace_machine_or_human_text(tmp_path):
+    _, project, line_id = make_project(tmp_path)
+    project.correct_line(line_id, "human reading")
+    project.add_line(1, 0, BoundingBox(20, 30, 400, 50), "new machine", 0.99, [0.99], [7])
+    line = project.line(line_id)
+    assert line.machine_text == "=machine"
+    assert line.display_text == "human reading"
+    assert line.bbox == BoundingBox(10, 20, 300, 40)
+    project.close()
+
+
+def test_project_creation_requires_explicit_overwrite(tmp_path):
+    path, project, _ = make_project(tmp_path)
+    project.close()
+    import pytest
+
+    with pytest.raises(FileExistsError):
+        ProjectDatabase(path, create=True)
+    replacement = ProjectDatabase(path, create=True, overwrite=True)
+    assert replacement.document() is None
+    assert replacement.lines() == []
+    replacement.close()
+
+
 def test_exports_are_utf8_structured_and_csv_safe(tmp_path):
     _, project, _ = make_project(tmp_path)
     text = tmp_path / "out.txt"

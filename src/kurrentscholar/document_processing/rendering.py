@@ -27,7 +27,10 @@ class DocumentRenderer:
 
             try:
                 document = pdfium.PdfDocument(str(source))
-                return len(document)
+                try:
+                    return len(document)
+                finally:
+                    document.close()
             except Exception as error:
                 raise ValueError("The PDF could not be opened. It may be damaged or encrypted.") from error
         if source.suffix.lower() in self.SUPPORTED_IMAGES:
@@ -65,11 +68,20 @@ class DocumentRenderer:
 
         try:
             document = pdfium.PdfDocument(str(source))
-            if not 0 <= page_index < len(document):
-                raise ValueError("Page number is outside the document")
-            page = document[page_index]
-            bitmap = page.render(scale=dpi / 72.0, rev_byteorder=True)
-            return bitmap.to_pil().convert("RGB")
+            try:
+                if not 0 <= page_index < len(document):
+                    raise ValueError("Page number is outside the document")
+                page = document[page_index]
+                try:
+                    bitmap = page.render(scale=dpi / 72.0, rev_byteorder=True)
+                    try:
+                        return bitmap.to_pil().convert("RGB")
+                    finally:
+                        bitmap.close()
+                finally:
+                    page.close()
+            finally:
+                document.close()
         except ValueError:
             raise
         except Exception as error:

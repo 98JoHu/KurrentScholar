@@ -56,14 +56,15 @@ def export_csv(project: ProjectDatabase, destination: str | Path) -> None:
         for line in project.lines():
             writer.writerow([_safe_csv(value) for value in (
                 document.get("filename", ""), line.page_number, line.reading_order + 1, line.machine_text,
-                line.corrected_text or "", line.confidence, line.review_status, line.bbox.x, line.bbox.y,
+                line.corrected_text if line.corrected_text is not None else "",
+                line.confidence, line.review_status, line.bbox.x, line.bbox.y,
                 line.bbox.width, line.bbox.height, line.notes,
             )])
 
 
 def export_json(project: ProjectDatabase, destination: str | Path) -> None:
     payload = {
-        "schema": "https://kurrentscholar.example/schema/export-v1.json",
+        "schema": "urn:kurrentscholar:export:1",
         "schema_version": PROJECT_SCHEMA_VERSION,
         "provenance": {
             "software": "KurrentScholar",
@@ -73,7 +74,11 @@ def export_json(project: ProjectDatabase, destination: str | Path) -> None:
             "model_doi": MODEL_DOI,
             **project.info(),
         },
-        "document": project.document(),
+        "document": {
+            key: value
+            for key, value in (project.document() or {}).items()
+            if key != "source_path"
+        },
         "metadata": project.metadata(),
         "lines": [
             {

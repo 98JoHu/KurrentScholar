@@ -4,7 +4,8 @@
 
 There is no accepted installer yet. Only use a future release artifact whose GitHub release, checksum,
 and clean-machine test result are published. The installer is designed to be per-user and to leave research
-projects untouched during uninstall. The recognition model is installed separately on first request.
+projects untouched during uninstall. The recognition model is installed separately. On the first start,
+KurrentScholar explains that transcription cannot work without it and offers the one-time download.
 
 ## Source setup
 
@@ -19,6 +20,12 @@ uv run kurrentscholar
 
 The model download needs 1,340,570,347 bytes plus temporary/cache headroom (the app requires 1.8 GB free).
 If interrupted, choose Install model again; Hugging Face Hub reuses completed files.
+
+KurrentScholar verifies the expected file sizes and the pinned weights checksum before marking the model
+ready. If installation fails, retry from **Install model** and inspect
+`%LOCALAPPDATA%\KurrentScholar\Logs\kurrentscholar.log` for the recorded technical cause. Windows' trust
+store is used for HTTPS, which supports ordinary institutional certificate deployments without disabling
+certificate verification.
 
 ## Windows one-directory build
 

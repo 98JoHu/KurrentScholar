@@ -14,8 +14,9 @@
 - [ ] Fill maintainer name, ORCID, institution, repository URL, and release DOI.
 - [ ] Benchmark CPU speed/memory on named hardware; do not publish estimates until measured.
 - [ ] Add interactive line-boundary editing and correction-history UI.
-- [ ] Add byte-level model download progress and safe in-flight cancellation (current download is
-  resumable and runs off the UI thread; the dialog can be hidden but not abort the active HTTP request).
+- [x] Add byte-level model download progress.
+- [ ] Add safe in-flight model-download cancellation (the download is resumable and runs off the UI
+  thread; the dialog can be hidden but does not abort the active HTTP request).
 
 ## Later
 

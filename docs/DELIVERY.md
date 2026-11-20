@@ -1,6 +1,6 @@
 # Development delivery record
 
-Recorded 2026-11-19 on the local Windows 11 development host. This is an engineering snapshot, not a
+Updated 2026-11-20 on the local Windows 11 development host. This is an engineering snapshot, not a
 public release claim.
 
 ## Implemented
@@ -20,18 +20,18 @@ public release claim.
 ## Actual verification
 
 - Ruff: passed.
-- Pytest ordinary suite: 22 passed, 1 real-model test deselected.
-- Real-model suite: 1 passed, 22 ordinary tests deselected; pinned model loaded locally on CPU,
-  generated text, and returned bounded token transition probabilities in 9.62 seconds total test time.
-- Consolidated suite with the pinned model enabled: 23 passed in 9.56 seconds; downloaded runtime model
-  contained zero excluded pickle/training files.
+- Consolidated suite with the pinned model enabled: 28 passed in 20.06 seconds.
+- The pinned model loaded locally on CPU, generated text, and returned bounded token transition
+  probabilities; downloaded runtime files contained no excluded pickle/training weights.
 - Source Qt offscreen startup: passed.
-- PyInstaller Windows one-directory build: succeeded on Python 3.12.12.
-- Packaged executable offscreen startup: exit 0.
+- PyInstaller Windows one-directory build: succeeded on Python 3.11.14.
+- Packaged executable offscreen startup: exit 0. Packaged model installation/integrity verification and
+  genuine CPU inference diagnostic: exit 0.
 - Inno Setup 7.1.1 compile: succeeded (verified signed compiler, non-commercial use).
-- Installer local acceptance: install exit 0, installed-app smoke exit 0, uninstall exit 0, test directory removed.
-- Installer size: 171,057,567 bytes.
-- Installer SHA-256: `5c8ac99a18ef07dad98dded69eee8ffd99f6bb8490cea966872c5a096c6cf28c`.
+- The installer workflow previously passed a local install/start/uninstall cycle; the current corrected
+  bundle passed packaged startup and model inference checks and still requires clean-VM acceptance.
+- Installer size: 177,450,902 bytes.
+- Installer SHA-256: `2d5da17cf20a13e6932be9d0aab370546ad55414c0eddd2636d7ffd2482acf9b`.
 
 Artifact paths:
 
@@ -46,7 +46,7 @@ Generated binaries are ignored by Git and must not be committed.
 - The pinned 1.34 GB model was downloaded and real local CPU inference was executed, but only with a
   synthetic architecture/score smoke input. A legally reusable archival line/page and ground truth are
   still required for accuracy and full-page end-to-end evidence.
-- No clean Windows VM test, real scanned-PDF end-to-end test, model-download UI integrity/cancellation test,
+- No clean Windows VM test, real scanned-PDF end-to-end test, model-download cancellation test,
   performance benchmark, confidence calibration, or installer code signing.
 - Fallback segmentation is not validated for complex historical layout; manual geometry editing is absent.
 - Runtime localization, thumbnails, settings/metadata UI, robust project relinking/packaging, pause/resume,

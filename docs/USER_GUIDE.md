@@ -4,8 +4,12 @@ Open a manuscript with the toolbar or drag it into the window. Choose a `.ksproj
 is never overwritten. The left panel displays the source and line boxes. The right panel lists generated
 lines, explicit uncertainty labels, and editable text. Selecting a list row highlights its parent source line.
 
-Install the model once while online, then choose **Transcribe**. Work completed before cancellation or a
-later error is committed incrementally. A page with no detected lines is marked as a segmentation failure;
+At first startup, accept **Install model**; the application cannot transcribe until this one-time,
+approximately 1.34 GB download has completed and passed its integrity checks. You can defer it and use
+**Install model** later. Documents are not uploaded, and the model is used offline afterward.
+
+Then choose **Transcribe**. Work completed before cancellation or a later error is committed incrementally.
+A page with no detected lines is marked as a segmentation failure;
 this is not evidence that the page is blank. Edits are stored separately from the original machine output.
 Mark a line verified only after comparison with the manuscript.
 

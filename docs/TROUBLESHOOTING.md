@@ -1,7 +1,9 @@
 # Troubleshooting
 
 - **Model download stops:** retry; completed files should resume. Check internet access and at least 1.8 GB
-  free storage. No project data is changed by model installation.
+  free storage. No project data is changed by model installation. The error dialog identifies common TLS,
+  proxy, firewall, permission, and timeout failures. Technical details are saved in
+  `%LOCALAPPDATA%\KurrentScholar\Logs\kurrentscholar.log`.
 - **Transcription is slow:** CPU inference of a 334M-parameter model is substantial. Process fewer pages;
   do not rely on unmeasured time estimates.
 - **Text is missing or lines are wrong:** the fallback segmenter is weakest on columns, marginalia, curves,

@@ -25,6 +25,7 @@ class StoredLine:
     review_status: str
     notes: str
     truncated: bool
+    recognition_error: str | None
 
     @property
     def display_text(self) -> str:
@@ -97,8 +98,16 @@ def utc_now() -> str:
 
 
 class ProjectDatabase:
-    def __init__(self, path: str | Path, create: bool = False) -> None:
+    def __init__(self, path: str | Path, create: bool = False, overwrite: bool = False) -> None:
         self.path = Path(path)
+        if create and self.path.exists():
+            if not overwrite:
+                raise FileExistsError(f"Project already exists: {self.path}")
+            self.path.unlink()
+            for suffix in ("-wal", "-shm"):
+                companion = Path(str(self.path) + suffix)
+                if companion.is_file():
+                    companion.unlink()
         if not create and not self.path.is_file():
             raise FileNotFoundError(f"Project does not exist: {self.path}")
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,7 +137,9 @@ class ProjectDatabase:
             )
 
     def close(self) -> None:
-        self.connection.close()
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
 
     def __enter__(self) -> ProjectDatabase:
         return self
@@ -154,6 +165,12 @@ class ProjectDatabase:
 
     def document(self) -> dict[str, Any] | None:
         row = self.connection.execute("SELECT * FROM documents WHERE id=1").fetchone()
+        return dict(row) if row else None
+
+    def page(self, page_number: int) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT * FROM pages WHERE page_number=?", (page_number,)
+        ).fetchone()
         return dict(row) if row else None
 
     def upsert_page(
@@ -190,7 +207,7 @@ class ProjectDatabase:
     ) -> int:
         now = utc_now()
         with self.connection:
-            cursor = self.connection.execute(
+            self.connection.execute(
                 """INSERT INTO lines(page_number,reading_order,x,y,width,height,machine_text,confidence,
                    token_probabilities_json,token_ids_json,truncated,recognition_error,created_at,updated_at)
                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -198,7 +215,8 @@ class ProjectDatabase:
                    width=excluded.width,height=excluded.height,machine_text=excluded.machine_text,
                    confidence=excluded.confidence,token_probabilities_json=excluded.token_probabilities_json,
                    token_ids_json=excluded.token_ids_json,truncated=excluded.truncated,
-                   recognition_error=excluded.recognition_error,updated_at=excluded.updated_at""",
+                   recognition_error=excluded.recognition_error,updated_at=excluded.updated_at
+                   WHERE lines.machine_text='' AND lines.corrected_text IS NULL""",
                 (
                     page_number,
                     reading_order,
@@ -216,9 +234,13 @@ class ProjectDatabase:
                     now,
                 ),
             )
-            return int(cursor.lastrowid or self.connection.execute(
-                "SELECT id FROM lines WHERE page_number=? AND reading_order=?", (page_number, reading_order)
-            ).fetchone()[0])
+            row = self.connection.execute(
+                "SELECT id FROM lines WHERE page_number=? AND reading_order=?",
+                (page_number, reading_order),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("Line insert did not create or locate a line record")
+            return int(row[0])
 
     def lines(self, page_number: int | None = None) -> list[StoredLine]:
         query = "SELECT * FROM lines"
@@ -243,13 +265,22 @@ class ProjectDatabase:
             review_status=row["review_status"],
             notes=row["notes"],
             truncated=bool(row["truncated"]),
+            recognition_error=row["recognition_error"],
         )
 
-    def correct_line(self, line_id: int, text: str) -> None:
+    def line(self, line_id: int) -> StoredLine:
+        row = self.connection.execute("SELECT * FROM lines WHERE id=?", (line_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown line {line_id}")
+        return self._stored_line(row)
+
+    def correct_line(self, line_id: int, text: str) -> bool:
         row = self.connection.execute("SELECT corrected_text,machine_text FROM lines WHERE id=?", (line_id,)).fetchone()
         if row is None:
             raise KeyError(f"Unknown line {line_id}")
         previous = row["corrected_text"] if row["corrected_text"] is not None else row["machine_text"]
+        if text == previous:
+            return False
         with self.connection:
             self.connection.execute(
                 "UPDATE lines SET corrected_text=?,updated_at=? WHERE id=?", (text, utc_now(), line_id)
@@ -258,6 +289,7 @@ class ProjectDatabase:
                 "INSERT INTO correction_history(line_id,previous_text,new_text,changed_at) VALUES(?,?,?,?)",
                 (line_id, previous, text, utc_now()),
             )
+        return True
 
     def set_review_status(self, line_id: int, status: ReviewStatus) -> None:
         with self.connection:

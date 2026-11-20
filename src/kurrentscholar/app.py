@@ -10,9 +10,13 @@ from pathlib import Path
 from kurrentscholar import __version__
 from kurrentscholar.constants import APP_NAME
 from kurrentscholar.diagnostics import (
+    GuiWatchdog,
+    configure_crash_logging,
     configure_logging,
     configure_network_trust,
+    exception_details,
     install_exception_hook,
+    install_qt_message_handler,
 )
 
 
@@ -26,9 +30,19 @@ def main() -> int:
     parser.add_argument("--report", type=Path, help=argparse.SUPPRESS)
     arguments, qt_arguments = parser.parse_known_args()
     log_file = configure_logging()
+    crash_log_file = configure_crash_logging()
     configure_network_trust()
     install_exception_hook()
     logger = logging.getLogger(APP_NAME)
+    logger.info(
+        "Application starting: version=%s pid=%s frozen=%s python=%s log=%s crash_log=%s",
+        __version__,
+        os.getpid(),
+        bool(getattr(sys, "frozen", False)),
+        sys.version.split()[0],
+        log_file,
+        crash_log_file,
+    )
     if arguments.version:
         print(__version__)
         return 0
@@ -66,7 +80,7 @@ def main() -> int:
             report["success"] = True
             exit_code = 0
         except Exception as error:
-            logger.exception("Packaged model diagnostic failed")
+            logger.error("Packaged model diagnostic failed\n%s", exception_details(error))
             report["error"] = f"{error.__class__.__name__}: {error}"
             exit_code = 2
         if arguments.report:
@@ -77,11 +91,13 @@ def main() -> int:
         return exit_code
     if arguments.smoke_test:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
     from kurrentscholar.ui.main_window import MainWindow
 
     application = QApplication([sys.argv[0], *qt_arguments])
+    install_qt_message_handler()
     application.setApplicationName("KurrentScholar")
     application.setOrganizationName("KurrentScholar")
     window = MainWindow(offer_model_on_startup=not arguments.smoke_test)
@@ -89,6 +105,13 @@ def main() -> int:
         window.close()
         print("KurrentScholar startup smoke test passed")
         return 0
+    watchdog = GuiWatchdog()
+    heartbeat = QTimer(application)
+    heartbeat.setInterval(1_000)
+    heartbeat.timeout.connect(watchdog.pulse)
+    application.aboutToQuit.connect(watchdog.stop)
+    watchdog.start()
+    heartbeat.start()
     window.show()
     return application.exec()
 

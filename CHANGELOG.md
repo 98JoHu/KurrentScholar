@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2-dev — unreleased
+
+- Fixed the post-download UI hang by routing all background-worker completion, failure, status, and
+  transcription progress signals through GUI-affine Qt slots instead of anonymous cross-thread callbacks.
+- Added stage-by-stage model and transcription logging, Qt/thread exception capture, a native-fault log,
+  and a GUI watchdog that records every thread stack if the event loop becomes unresponsive.
+- Made download, integrity-check, and finalization phases explicit so completed downloads no longer appear
+  stuck while the weights are being hashed.
+
 ## 0.1.1-dev — unreleased
 
 - Fixed installed-app model downloads with Windows trust-store support, explicit frozen-package

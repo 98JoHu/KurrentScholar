@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kurrentscholar"
-version = "0.1.1.dev0"
+version = "0.1.2.dev0"
 description = "Offline-first desktop transcription for historical German Kurrent manuscripts"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"

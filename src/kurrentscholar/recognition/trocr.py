@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
 
 from PIL import Image
 
 from kurrentscholar.domain import RecognitionResult, geometric_mean
+
+LOGGER = logging.getLogger("KurrentScholar.recognition")
 
 
 class TrOCRBackend:
@@ -20,9 +24,12 @@ class TrOCRBackend:
     def load(self) -> None:
         from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
+        started = time.monotonic()
+        LOGGER.info("Loading TrOCR processor from %s", self.model_path)
         self._processor = TrOCRProcessor.from_pretrained(
             self.model_path, local_files_only=True, trust_remote_code=False
         )
+        LOGGER.info("TrOCR processor loaded; loading model weights on %s", self.device)
         self._model = VisionEncoderDecoderModel.from_pretrained(
             self.model_path,
             local_files_only=True,
@@ -30,6 +37,7 @@ class TrOCRBackend:
             use_safetensors=True,
         ).to(self.device)
         self._model.eval()
+        LOGGER.info("TrOCR model ready after %.1f seconds", time.monotonic() - started)
 
     def recognize_line(self, image: Image.Image) -> RecognitionResult:
         """Recognize one cropped line. Passing a page is a caller error."""
@@ -41,6 +49,8 @@ class TrOCRBackend:
             raise ValueError("Recognition input is too small to contain a text line")
         if image.width * image.height > 25_000_000:
             raise ValueError("Recognition input is too large for a text-line crop")
+        started = time.monotonic()
+        LOGGER.info("Starting line inference for %sx%s pixels", image.width, image.height)
         pixels = self._processor(images=image.convert("RGB"), return_tensors="pt").pixel_values.to(self.device)
         with torch.inference_mode():
             generated = self._model.generate(
@@ -66,6 +76,13 @@ class TrOCRBackend:
         text = self._processor.batch_decode(generated.sequences, skip_special_tokens=True)[0]
         eos_id = self._model.generation_config.eos_token_id
         truncated = len(probabilities) >= self.max_new_tokens and eos_id not in generated_ids
+        LOGGER.info(
+            "Line inference finished after %.1f seconds: generated_characters=%s scored_tokens=%s truncated=%s",
+            time.monotonic() - started,
+            len(text),
+            len(token_probabilities),
+            truncated,
+        )
         return RecognitionResult(
             text=text,
             token_ids=token_ids,

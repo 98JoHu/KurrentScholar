@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import traceback
 from pathlib import Path
 
 from PIL.ImageQt import ImageQt
@@ -31,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from kurrentscholar import __version__
 from kurrentscholar.constants import APP_NAME, MODEL_ID, MODEL_REQUIRED_BYTES, MODEL_REVISION
-from kurrentscholar.diagnostics import log_path
+from kurrentscholar.diagnostics import exception_details, log_path
 from kurrentscholar.document_processing import DocumentRenderer
 from kurrentscholar.domain import ConfidenceThresholds, ReviewStatus
 from kurrentscholar.exports import ExportOptions, export_csv, export_docx, export_json, export_text
@@ -58,6 +57,12 @@ class ProcessingWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            LOGGER.info(
+                "Transcription worker starting: project=%s pages=%s thread=%s",
+                self.project_path,
+                len(self.pages),
+                threading.get_ident(),
+            )
             with ProjectDatabase(self.project_path) as project:
                 document = project.document()
                 if not document:
@@ -65,7 +70,9 @@ class ProcessingWorker(QObject):
                 renderer = DocumentRenderer()
                 segmenter = ProjectionSegmenter()
                 recognizer = TrOCRBackend(self.model_path)
+                LOGGER.info("Loading recognition model from %s", self.model_path)
                 recognizer.load()
+                LOGGER.info("Recognition model loaded")
                 project.set_info({
                     "model_id": MODEL_ID,
                     "model_revision": MODEL_REVISION,
@@ -78,7 +85,15 @@ class ProcessingWorker(QObject):
                         break
                     self.progress.emit(position - 1, total, f"Rendering page {page_index + 1}")
                     rendered = renderer.render(document["source_path"], page_index, self.dpi)
+                    LOGGER.info(
+                        "Rendered page %s at %s DPI (%sx%s)",
+                        page_index + 1,
+                        self.dpi,
+                        rendered.image.width,
+                        rendered.image.height,
+                    )
                     lines = segmenter.detect_lines(rendered.image)
+                    LOGGER.info("Detected %s line(s) on page %s", len(lines), page_index + 1)
                     status = "segmented" if lines else "segmentation_failed"
                     error = None if lines else "No handwriting lines were detected; review this page manually."
                     project.upsert_page(page_index + 1, rendered.image.width, rendered.image.height,
@@ -97,17 +112,30 @@ class ProcessingWorker(QObject):
                         box = detected.bbox
                         crop = rendered.image.crop((box.x, box.y, box.right, box.bottom))
                         try:
+                            LOGGER.info(
+                                "Recognizing page %s line %s", page_index + 1, line_number + 1
+                            )
                             result = recognizer.recognize_line(crop)
                             project.add_line(page_index + 1, detected.reading_order, box, result.text,
                                              result.line_confidence, result.token_probabilities,
                                              result.token_ids, result.truncated)
                         except Exception as error:  # keep failed regions visible
+                            LOGGER.error(
+                                "Recognition failed on page %s line %s\n%s",
+                                page_index + 1,
+                                line_number + 1,
+                                exception_details(error),
+                            )
                             project.add_line(page_index + 1, detected.reading_order, box, "", None, [], [],
                                              recognition_error=str(error))
                     self.progress.emit(position, total, f"Saved page {page_index + 1}")
-            self.finished.emit(self.cancel_event.is_set())
+            cancelled = self.cancel_event.is_set()
+            LOGGER.info("Transcription worker finished: cancelled=%s", cancelled)
+            self.finished.emit(cancelled)
         except Exception as error:
-            self.failed.emit(str(error), traceback.format_exc())
+            details = exception_details(error)
+            LOGGER.error("Transcription worker failed\n%s", details)
+            self.failed.emit(str(error), details)
 
     def request_cancel(self) -> None:
         self.cancel_event.set()
@@ -125,10 +153,14 @@ class ModelInstallWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            LOGGER.info("Model installation worker starting: thread=%s", threading.get_ident())
             self.manager.install(self.status.emit)
+            LOGGER.info("Model installation worker finished successfully")
             self.finished.emit()
         except Exception as error:
-            self.failed.emit(str(error), traceback.format_exc())
+            details = exception_details(error)
+            LOGGER.error("Model installation worker failed\n%s", details)
+            self.failed.emit(str(error), details)
 
 
 class MainWindow(QMainWindow):
@@ -147,10 +179,12 @@ class MainWindow(QMainWindow):
         self.thresholds = ConfidenceThresholds()
         self._thread: QThread | None = None
         self._worker: ProcessingWorker | None = None
+        self._processing_progress: QProgressDialog | None = None
         self._install_thread: QThread | None = None
         self._install_worker: ModelInstallWorker | None = None
         self._install_progress: QProgressDialog | None = None
         self._install_progress_timer: QTimer | None = None
+        self._install_phase = "idle"
         self._edit_timer = QTimer(self)
         self._edit_timer.setSingleShot(True)
         self._edit_timer.setInterval(700)
@@ -215,6 +249,7 @@ class MainWindow(QMainWindow):
             ("Install model", self.install_model, None),
             ("Zoom in", lambda: self.viewer.scale(1.2, 1.2), QKeySequence.ZoomIn),
             ("Zoom out", lambda: self.viewer.scale(1 / 1.2, 1 / 1.2), QKeySequence.ZoomOut),
+            ("Diagnostic log", self.show_diagnostic_log, None),
             ("About", self.about, None),
         ]
         for text, callback, shortcut in actions:
@@ -322,7 +357,7 @@ class MainWindow(QMainWindow):
                 f"Project created. Page 1 of {page_count}. Choose Transcribe when ready."
             )
         except Exception as error:
-            self._error("The project could not be created", str(error), traceback.format_exc())
+            self._error("The project could not be created", str(error), exception_details(error))
 
     @Slot()
     def open_project(self) -> None:
@@ -427,44 +462,92 @@ class MainWindow(QMainWindow):
         self._worker = ProcessingWorker(self.project_path, pages, status.path)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
-        progress = QProgressDialog("Preparing transcription…", "Cancel", 0, len(pages), self)
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setAutoClose(False)
-        progress.canceled.connect(lambda: self._request_processing_cancel(progress))
-        self._worker.progress.connect(lambda value, maximum, text: (
-            progress.setMaximum(maximum), progress.setValue(value), progress.setLabelText(text)
-        ))
-        self._worker.finished.connect(lambda cancelled: self._processing_done(progress, cancelled))
-        self._worker.failed.connect(lambda message, details: self._processing_failed(progress, message, details))
+        self._processing_progress = QProgressDialog(
+            "Preparing transcription…", "Cancel", 0, len(pages), self
+        )
+        self._processing_progress.setWindowModality(Qt.WindowModal)
+        self._processing_progress.setAutoClose(False)
+        self._processing_progress.canceled.connect(self._request_processing_cancel)
+        self._worker.progress.connect(self._update_processing_progress)
+        self._worker.finished.connect(self._processing_done)
+        self._worker.failed.connect(self._processing_failed)
         self._worker.finished.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.failed.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._processing_thread_finished)
+        self._thread.finished.connect(self._thread.deleteLater)
         self._set_processing_busy(True)
+        LOGGER.info("Starting transcription thread")
         self._thread.start()
 
-    def _request_processing_cancel(self, progress: QProgressDialog) -> None:
+    @Slot()
+    def _request_processing_cancel(self) -> None:
         if self._worker:
             self._worker.request_cancel()
-        progress.setLabelText("Stopping safely after the current line…")
-        progress.setCancelButton(None)
-        progress.show()
+        if self._processing_progress:
+            self._processing_progress.setLabelText("Stopping safely after the current line…")
+            self._processing_progress.setCancelButton(None)
+            self._processing_progress.show()
+        LOGGER.info("Transcription cancellation requested")
 
-    def _processing_done(self, progress: QProgressDialog, cancelled: bool) -> None:
-        progress.close()
-        self.project = ProjectDatabase(self.project_path)
-        self._render_page()
-        self._refresh_lines()
+    @Slot(int, int, str)
+    def _update_processing_progress(self, value: int, maximum: int, text: str) -> None:
+        if not self._processing_progress:
+            return
+        self._processing_progress.setMaximum(maximum)
+        self._processing_progress.setValue(value)
+        self._processing_progress.setLabelText(text)
+
+    @Slot(bool)
+    def _processing_done(self, cancelled: bool) -> None:
+        LOGGER.info("Processing completion received on GUI thread: cancelled=%s", cancelled)
+        if self._processing_progress:
+            self._processing_progress.close()
+            self._processing_progress = None
         self._set_processing_busy(False)
+        if not self._restore_project_after_processing():
+            return
         if cancelled:
             self.status_label.setText("Transcription cancelled safely; completed lines were saved.")
         else:
             self.status_label.setText("Transcription completed; all results were saved.")
 
-    def _processing_failed(self, progress: QProgressDialog, message: str, details: str) -> None:
-        progress.close()
-        self.project = ProjectDatabase(self.project_path)
+    @Slot(str, str)
+    def _processing_failed(self, message: str, details: str) -> None:
+        if self._processing_progress:
+            self._processing_progress.close()
+            self._processing_progress = None
         self._set_processing_busy(False)
         LOGGER.error("Transcription failed: %s\n%s", message, details)
-        self._error("Transcription could not continue", message, details)
+        if self._restore_project_after_processing():
+            self._error("Transcription could not continue", message, details)
+
+    def _restore_project_after_processing(self) -> bool:
+        try:
+            if not self.project_path:
+                raise FileNotFoundError("The project path is unavailable")
+            self.project = ProjectDatabase(self.project_path)
+            self._render_page()
+            self._refresh_lines()
+            return True
+        except Exception as error:
+            details = exception_details(error)
+            LOGGER.error("Could not reopen the project after processing\n%s", details)
+            self.project = None
+            self._error(
+                "The project could not be reopened",
+                "Processing stopped, but KurrentScholar could not reopen the project database. "
+                "The project file has not been deleted.",
+                details,
+            )
+            return False
+
+    @Slot()
+    def _processing_thread_finished(self) -> None:
+        LOGGER.info("Transcription thread stopped")
+        self._worker = None
+        self._thread = None
 
     def _set_processing_busy(self, busy: bool) -> None:
         for name in ("Open document", "Open project", "Transcribe", "Export"):
@@ -504,6 +587,7 @@ class MainWindow(QMainWindow):
         progress.canceled.connect(progress.hide)
         progress.show()
         self._install_progress = progress
+        self._install_phase = "download"
         self._install_progress_timer = QTimer(self)
         self._install_progress_timer.setInterval(500)
         self._install_progress_timer.timeout.connect(self._update_model_download_progress)
@@ -512,21 +596,48 @@ class MainWindow(QMainWindow):
         self._install_worker = ModelInstallWorker(self.model_manager)
         self._install_worker.moveToThread(self._install_thread)
         self._install_thread.started.connect(self._install_worker.run)
-        self._install_worker.status.connect(progress.setLabelText)
-        self._install_worker.finished.connect(lambda: self._model_install_done(progress))
-        self._install_worker.failed.connect(
-            lambda message, details: self._model_install_failed(progress, message, details)
-        )
+        self._install_worker.status.connect(self._model_install_status)
+        self._install_worker.finished.connect(self._model_install_done)
+        self._install_worker.failed.connect(self._model_install_failed)
         self._install_worker.finished.connect(self._install_thread.quit)
         self._install_worker.failed.connect(self._install_thread.quit)
+        self._install_worker.finished.connect(self._install_worker.deleteLater)
+        self._install_worker.failed.connect(self._install_worker.deleteLater)
+        self._install_thread.finished.connect(self._model_install_thread_finished)
+        self._install_thread.finished.connect(self._install_thread.deleteLater)
+        LOGGER.info("Starting model installation thread")
         self._install_thread.start()
 
-    def _model_install_done(self, progress: QProgressDialog) -> None:
-        if self._install_progress_timer:
-            self._install_progress_timer.stop()
-        progress.setValue(progress.maximum())
-        progress.close()
+    @Slot(str)
+    def _model_install_status(self, message: str) -> None:
+        LOGGER.info("Model installation status: %s", message)
+        lowered = message.lower()
+        if lowered.startswith("downloading"):
+            self._install_phase = "download"
+        elif lowered.startswith("verifying"):
+            self._install_phase = "verify"
+        else:
+            self._install_phase = "status"
+        if self._install_progress:
+            self._install_progress.setLabelText(message)
+
+    @Slot()
+    def _model_install_done(self) -> None:
+        LOGGER.info("Model installation completion received on GUI thread")
+        self._stop_install_progress_timer()
+        status = self.model_manager.status()
+        if not status.installed:
+            self._model_install_failed(
+                "The model worker finished, but the verified installation marker is missing.",
+                f"Missing files: {', '.join(status.missing_files) or 'none'}\n"
+                f"Invalid files: {', '.join(status.invalid_files) or 'none'}",
+            )
+            return
+        if self._install_progress:
+            self._install_progress.setValue(self._install_progress.maximum())
+            self._install_progress.close()
         self._install_progress = None
+        self._install_phase = "idle"
         self.actions["Install model"].setEnabled(True)
         self.status_label.setText("Handwriting model installed and ready for offline use.")
         QMessageBox.information(
@@ -536,13 +647,13 @@ class MainWindow(QMainWindow):
             "Transcription can now run without an internet connection.",
         )
 
-    def _model_install_failed(
-        self, progress: QProgressDialog, message: str, details: str
-    ) -> None:
-        if self._install_progress_timer:
-            self._install_progress_timer.stop()
-        progress.close()
+    @Slot(str, str)
+    def _model_install_failed(self, message: str, details: str) -> None:
+        self._stop_install_progress_timer()
+        if self._install_progress:
+            self._install_progress.close()
         self._install_progress = None
+        self._install_phase = "idle"
         self.actions["Install model"].setEnabled(True)
         LOGGER.error("Model installation failed: %s\n%s", message, details)
         self._error(
@@ -551,8 +662,21 @@ class MainWindow(QMainWindow):
             f"Diagnostic log: {log_path()}\n\n{details}",
         )
 
+    def _stop_install_progress_timer(self) -> None:
+        if self._install_progress_timer:
+            self._install_progress_timer.stop()
+            self._install_progress_timer.deleteLater()
+            self._install_progress_timer = None
+
+    @Slot()
+    def _model_install_thread_finished(self) -> None:
+        LOGGER.info("Model installation thread stopped")
+        self._install_worker = None
+        self._install_thread = None
+
+    @Slot()
     def _update_model_download_progress(self) -> None:
-        if not self._install_progress:
+        if not self._install_progress or self._install_phase != "download":
             return
         downloaded = self.model_manager.downloaded_bytes()
         value = min(999, int(downloaded * 1000 / MODEL_REQUIRED_BYTES))
@@ -560,7 +684,7 @@ class MainWindow(QMainWindow):
         gib = downloaded / (1024 ** 3)
         total_gib = MODEL_REQUIRED_BYTES / (1024 ** 3)
         self._install_progress.setLabelText(
-            f"Downloading and verifying the handwriting model: {gib:.2f} of {total_gib:.2f} GiB. "
+            f"Downloading the handwriting model: {gib:.2f} of {total_gib:.2f} GiB. "
             "Completed data is reused after interruptions."
         )
 
@@ -646,7 +770,20 @@ class MainWindow(QMainWindow):
             "KurrentScholar did not develop or train it. MIT-licensed application and model."
         )
 
+    @Slot()
+    def show_diagnostic_log(self) -> None:
+        QMessageBox.information(
+            self,
+            "Diagnostic logs",
+            "KurrentScholar records application stages, recoverable errors, Qt warnings, background "
+            "thread failures, fatal crashes, and GUI stalls locally.\n\n"
+            f"Application log:\n{log_path()}\n\n"
+            f"Crash and native-fault log:\n{log_path().parent / 'kurrentscholar-crash.log'}\n\n"
+            "These files may contain local filenames but never manuscript contents.",
+        )
+
     def _error(self, title: str, message: str, details: str = "") -> None:
+        LOGGER.error("UI error: %s: %s\n%s", title, message, details)
         dialog = QMessageBox(QMessageBox.Critical, title, message, parent=self)
         if details:
             dialog.setDetailedText(details)

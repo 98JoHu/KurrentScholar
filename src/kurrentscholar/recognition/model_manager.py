@@ -20,6 +20,7 @@ from kurrentscholar.constants import (
     MODEL_SAFETENSORS_SHA256,
     default_data_dir,
 )
+from kurrentscholar.diagnostics import exception_details
 
 LOGGER = logging.getLogger(f"{APP_NAME}.model_install")
 
@@ -43,12 +44,17 @@ class ModelManager:
         self.root = root or default_data_dir() / "models" / MODEL_REVISION
 
     def status(self) -> ModelStatus:
-        missing = tuple(name for name in MODEL_FILES if not (self.root / name).is_file())
-        invalid = tuple(
-            name
-            for name, expected in MODEL_FILE_SIZES.items()
-            if (self.root / name).is_file() and (self.root / name).stat().st_size != expected
-        )
+        missing = []
+        invalid = []
+        for name, expected in MODEL_FILE_SIZES.items():
+            path = self.root / name
+            try:
+                if not path.is_file():
+                    missing.append(name)
+                elif path.stat().st_size != expected:
+                    invalid.append(name)
+            except OSError:
+                invalid.append(name)
         manifest_ok = False
         try:
             manifest = json.loads((self.root / "kurrentscholar-model.json").read_text("utf-8"))
@@ -63,8 +69,8 @@ class ModelManager:
             self.root,
             MODEL_REVISION,
             MODEL_REQUIRED_BYTES,
-            missing,
-            invalid,
+            tuple(missing),
+            tuple(invalid),
         )
 
     def check_disk_space(self) -> bool:
@@ -73,11 +79,14 @@ class ModelManager:
         return shutil.disk_usage(self.root.parent).free >= remaining + 512 * 1024 * 1024
 
     def downloaded_bytes(self) -> int:
-        completed = sum(
-            min((self.root / name).stat().st_size, expected)
-            for name, expected in MODEL_FILE_SIZES.items()
-            if (self.root / name).is_file()
-        )
+        completed = 0
+        for name, expected in MODEL_FILE_SIZES.items():
+            path = self.root / name
+            try:
+                if path.is_file():
+                    completed += min(path.stat().st_size, expected)
+            except OSError:
+                continue
         partial = 0
         cache = self.root / ".cache"
         if cache.is_dir():
@@ -92,6 +101,11 @@ class ModelManager:
         return min(MODEL_REQUIRED_BYTES, completed + partial)
 
     def install(self, progress: Callable[[str], None] | None = None) -> Path:
+        def report(message: str) -> None:
+            LOGGER.info("Model installation stage: %s", message)
+            if progress:
+                progress(message)
+
         if not self.check_disk_space():
             raise ModelInstallError(
                 "At least 1.8 GB of free disk space is required for the model and download cache."
@@ -110,11 +124,11 @@ class ModelManager:
         last_error: Exception | None = None
         for attempt in range(1, 4):
             try:
-                if progress:
-                    progress(
-                        "Downloading the pinned handwriting model "
-                        f"(attempt {attempt}/3). Interrupted downloads resume automatically."
-                    )
+                report(
+                    "Downloading the pinned handwriting model "
+                    f"(attempt {attempt}/3). Interrupted downloads resume automatically."
+                )
+                download_started = time.monotonic()
                 snapshot_download(
                     repo_id=MODEL_ID,
                     revision=MODEL_REVISION,
@@ -122,20 +136,24 @@ class ModelManager:
                     allow_patterns=list(MODEL_FILES),
                     max_workers=2,
                 )
+                LOGGER.info(
+                    "Hugging Face snapshot download returned after %.1f seconds",
+                    time.monotonic() - download_started,
+                )
                 last_error = None
                 break
             except Exception as error:
                 last_error = error
-                LOGGER.exception("Model download attempt %s failed", attempt)
+                LOGGER.error(
+                    "Model download attempt %s failed\n%s", attempt, exception_details(error)
+                )
                 if attempt < 3:
-                    if progress:
-                        progress(f"Download attempt {attempt} failed; retrying shortly…")
+                    report(f"Download attempt {attempt} failed; retrying shortly…")
                     time.sleep(2 ** (attempt - 1))
         if last_error is not None:
             raise ModelInstallError(self._friendly_download_error(last_error)) from last_error
 
-        if progress:
-            progress("Verifying downloaded model files…")
+        report("Checking the downloaded model files…")
         status = self.status()
         if status.missing_files or status.invalid_files:
             details = []
@@ -148,7 +166,13 @@ class ModelManager:
                     # mistake a truncated file for a completed download.
                     (self.root / name).unlink(missing_ok=True)
             raise ModelInstallError("The model download is incomplete (" + "; ".join(details) + ").")
+        report(
+            "Verifying model integrity (about 1.34 GB). This can take a little while; "
+            "KurrentScholar remains usable."
+        )
+        hash_started = time.monotonic()
         actual_hash = self._sha256(self.root / "model.safetensors")
+        LOGGER.info("Model checksum completed after %.1f seconds", time.monotonic() - hash_started)
         if actual_hash != MODEL_SAFETENSORS_SHA256:
             LOGGER.error("Safetensors checksum mismatch: %s", actual_hash)
             # Hugging Face Hub will fetch the file again on the next retry when
@@ -158,6 +182,7 @@ class ModelManager:
                 "The downloaded model failed its integrity check. Retry the installation; "
                 "if it fails again, see the diagnostic log."
             )
+        report("Finalizing the verified model installation…")
         (self.root / "kurrentscholar-model.json").write_text(
             json.dumps(
                 {
@@ -171,6 +196,7 @@ class ModelManager:
             encoding="utf-8",
         )
         LOGGER.info("Model installation completed and verified")
+        report("Model verified and ready for offline transcription.")
         return self.root
 
     @staticmethod

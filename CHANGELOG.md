@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3-dev — unreleased
+
+- Enabled autoregressive decoder key/value caching during TrOCR inference. This retains the pinned FP32
+  model, processor, greedy decoding, token limit, and confidence scoring while avoiding repeated decoder
+  work; a real-crop benchmark produced identical text with roughly 2.4× higher throughput.
+- Added affinity-aware CPU runtime configuration and diagnostics. PyTorch's hardware-tuned thread defaults
+  are retained unless they exceed the processors available to the process, while explicit OpenMP/MKL
+  administrator settings remain authoritative.
+- Benchmarked and rejected line batching as a default: batch 2 was effectively neutral and larger batches
+  were substantially slower for variable-length autoregressive lines on the tested CPU.
+
 ## 0.1.2-dev — unreleased
 
 - Fixed the post-download UI hang by routing all background-worker completion, failure, status, and

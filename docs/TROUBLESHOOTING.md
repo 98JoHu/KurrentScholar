@@ -9,7 +9,10 @@
   to `%LOCALAPPDATA%\KurrentScholar\Logs\kurrentscholar-crash.log`. The **Diagnostic log** toolbar action
   shows both paths. Include both files with a bug report.
 - **Transcription is slow:** CPU inference of a 334M-parameter model is substantial. Process fewer pages;
-  do not rely on unmeasured time estimates.
+  do not rely on unmeasured time estimates. The diagnostic log records the CPUs available to the process,
+  PyTorch intra/inter-operation thread counts, MKLDNN availability, and decoder-cache state. Explicit
+  `OMP_NUM_THREADS` or `MKL_NUM_THREADS` settings are respected; remove unintended overrides before
+  comparing performance.
 - **Text is missing or lines are wrong:** the fallback segmenter is weakest on columns, marginalia, curves,
   tables, damage, severe bleed-through, and crossed text. Use **Re-segment** after installing a detector
   update; the app backs up the old project before replacement. Keep problematic pages for manual review;

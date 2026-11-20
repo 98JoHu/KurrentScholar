@@ -21,7 +21,8 @@ Qt UI -> processing service -> renderer -> segmenter -> recognizer
   within each line region. It is deterministic and packageable on Windows, but not equivalent to a
   learned historical-layout model.
 - `recognition`: backend protocol, pinned model manifest/installer, and TrOCR adapter. The adapter
-  accepts only a line image and loads with `local_files_only=True` and `use_safetensors=True`.
+  accepts only a line image, loads with `local_files_only=True` and `use_safetensors=True`, and uses
+  autoregressive decoder caching without changing model weights or decoding strategy.
 - `projects`: schema-versioned SQLite. `machine_text` and model scores are never overwritten when
   `corrected_text` changes. Writes use transactions, WAL, foreign keys, and incremental commits.
 - `exports`: representations are derived from stored provenance and escape spreadsheet formula cells.

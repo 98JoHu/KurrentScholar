@@ -8,6 +8,12 @@
   and a GUI watchdog that records every thread stack if the event loop becomes unresponsive.
 - Made download, integrity-check, and finalization phases explicit so completed downloads no longer appear
   stuck while the weights are being hashed.
+- Replaced connected horizontal-band segmentation with line-centre and valley detection so descenders,
+  flourishes, brackets, and underlining no longer merge many handwritten lines into one OCR crop.
+- Added scanner-edge, footer-watermark, paper-shadow, bleed-through, and implausibly tall crop safeguards,
+  validated across a 66-page historical manuscript at 300 DPI.
+- Added safe re-segmentation: incompatible old results are never matched to new boxes by ordinal position;
+  the UI creates a complete SQLite project backup before explicitly replacing segmentation and OCR output.
 
 ## 0.1.1-dev — unreleased
 

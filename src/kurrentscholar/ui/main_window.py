@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime
 from pathlib import Path
+from statistics import median
 
 from PIL.ImageQt import ImageQt
 from PySide6.QtCore import QObject, QRectF, Qt, QThread, QTimer, Signal, Slot
@@ -69,6 +71,17 @@ class ProcessingWorker(QObject):
                     raise ValueError("The project has no source document")
                 renderer = DocumentRenderer()
                 segmenter = ProjectionSegmenter()
+                existing_summary = project.transcription_summary()
+                stored_info = project.info()
+                if existing_summary["line_count"] and (
+                    stored_info.get("segmentation_backend") != segmenter.backend_id
+                    or stored_info.get("segmentation_version") != segmenter.version
+                ):
+                    raise RuntimeError(
+                        "This project contains results from an older line detector. "
+                        "Open it in KurrentScholar and choose Re-segment so the existing "
+                        "results are backed up before replacement."
+                    )
                 recognizer = TrOCRBackend(self.model_path)
                 LOGGER.info("Loading recognition model from %s", self.model_path)
                 recognizer.load()
@@ -94,6 +107,22 @@ class ProcessingWorker(QObject):
                     )
                     lines = segmenter.detect_lines(rendered.image)
                     LOGGER.info("Detected %s line(s) on page %s", len(lines), page_index + 1)
+                    if lines:
+                        heights = [line.bbox.height for line in lines]
+                        typical_height = float(median(heights))
+                        suspicious = [
+                            height
+                            for height in heights
+                            if height > max(rendered.image.height * 0.10, typical_height * 3.5)
+                        ]
+                        if suspicious:
+                            LOGGER.warning(
+                                "Page %s has %s suspiciously tall crop(s): heights=%s, median=%.1f",
+                                page_index + 1,
+                                len(suspicious),
+                                suspicious,
+                                typical_height,
+                            )
                     status = "segmented" if lines else "segmentation_failed"
                     error = None if lines else "No handwriting lines were detected; review this page manually."
                     project.upsert_page(page_index + 1, rendered.image.width, rendered.image.height,
@@ -106,6 +135,11 @@ class ProcessingWorker(QObject):
                             break
                         prior = existing.get(detected.reading_order)
                         if prior and (prior.machine_text or prior.corrected_text is not None):
+                            if prior.bbox != detected.bbox:
+                                raise RuntimeError(
+                                    f"Line detection changed unexpectedly on page {page_index + 1}. "
+                                    "Use Re-segment to create a backup and replace the old results safely."
+                                )
                             continue
                         self.progress.emit(position - 1, total,
                                            f"Page {page_index + 1}: line {line_number + 1}/{len(lines)}")
@@ -185,6 +219,7 @@ class MainWindow(QMainWindow):
         self._install_progress: QProgressDialog | None = None
         self._install_progress_timer: QTimer | None = None
         self._install_phase = "idle"
+        self._last_resegmentation_backup: Path | None = None
         self._edit_timer = QTimer(self)
         self._edit_timer.setSingleShot(True)
         self._edit_timer.setInterval(700)
@@ -244,6 +279,7 @@ class MainWindow(QMainWindow):
             ("Previous page", lambda: self._change_page(-1), None),
             ("Next page", lambda: self._change_page(1), None),
             ("Transcribe", self.transcribe, None),
+            ("Re-segment", self.resegment, None),
             ("Save", self.save_current_edit, QKeySequence.Save),
             ("Export", self.export_project, None),
             ("Install model", self.install_model, None),
@@ -455,11 +491,87 @@ class MainWindow(QMainWindow):
         if not document:
             self._error("The project is incomplete", "No source document is recorded.")
             return
+        segmenter = ProjectionSegmenter()
+        summary = self.project.transcription_summary()
+        info = self.project.info()
+        if summary["line_count"] and (
+            info.get("segmentation_backend") != segmenter.backend_id
+            or info.get("segmentation_version") != segmenter.version
+        ):
+            if not self._backup_and_reset_transcription(
+                "This project was processed with an older line detector. Its boxes and text "
+                "cannot safely be matched to the new line-level boxes."
+            ):
+                return
+        self._start_transcription(document, status.path)
+
+    @Slot()
+    def resegment(self) -> None:
+        if not self.project or not self.project_path:
+            self._error("No project is open", "Open a manuscript first.")
+            return
+        summary = self.project.transcription_summary()
+        if summary["line_count"] and not self._backup_and_reset_transcription(
+            "Re-segmentation replaces all current boxes and transcriptions."
+        ):
+            return
+        self.transcribe()
+
+    def _backup_and_reset_transcription(self, reason: str) -> bool:
+        if not self.project or not self.project_path:
+            return False
+        summary = self.project.transcription_summary()
+        protected = summary["corrected_count"] + summary["reviewed_count"]
+        protected_message = (
+            f" This includes {summary['corrected_count']} corrected and "
+            f"{summary['reviewed_count']} reviewed line(s)."
+            if protected
+            else ""
+        )
+        answer = QMessageBox.question(
+            self,
+            "Back up and re-segment?",
+            f"{reason}\n\nThe current {summary['line_count']} line result(s) will be saved "
+            f"in a separate backup project before replacement.{protected_message}\n\n"
+            "Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return False
+
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        base = self.project_path.with_name(
+            f"{self.project_path.stem}.before-resegment-{stamp}.ksproj"
+        )
+        backup_path = base
+        counter = 2
+        while backup_path.exists():
+            backup_path = base.with_name(f"{base.stem}-{counter}{base.suffix}")
+            counter += 1
+        try:
+            self.project.backup_to(backup_path)
+            self.project.reset_transcription()
+            self._last_resegmentation_backup = backup_path
+            LOGGER.info("Backed up project to %s before re-segmentation", backup_path)
+            self._refresh_lines()
+            return True
+        except Exception as error:
+            details = exception_details(error)
+            LOGGER.error("Could not prepare safe re-segmentation\n%s", details)
+            self._error(
+                "Re-segmentation could not start",
+                "The existing results were not replaced because the backup could not be created.",
+                details,
+            )
+            return False
+
+    def _start_transcription(self, document: dict, model_path: Path) -> None:
         pages = list(range(document["page_count"]))
         self.project.close()
         self.project = None
         self._thread = QThread(self)
-        self._worker = ProcessingWorker(self.project_path, pages, status.path)
+        self._worker = ProcessingWorker(self.project_path, pages, model_path)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._processing_progress = QProgressDialog(
@@ -508,10 +620,20 @@ class MainWindow(QMainWindow):
         self._set_processing_busy(False)
         if not self._restore_project_after_processing():
             return
+        backup = self._last_resegmentation_backup
+        self._last_resegmentation_backup = None
         if cancelled:
-            self.status_label.setText("Transcription cancelled safely; completed lines were saved.")
+            message = "Transcription cancelled safely; completed lines were saved."
+            if backup:
+                message += f" Previous results: {backup}"
+            self.status_label.setText(message)
         else:
-            self.status_label.setText("Transcription completed; all results were saved.")
+            if backup:
+                self.status_label.setText(
+                    f"Re-segmentation and transcription completed. Previous results: {backup}"
+                )
+            else:
+                self.status_label.setText("Transcription completed; all results were saved.")
 
     @Slot(str, str)
     def _processing_failed(self, message: str, details: str) -> None:
@@ -521,6 +643,10 @@ class MainWindow(QMainWindow):
         self._set_processing_busy(False)
         LOGGER.error("Transcription failed: %s\n%s", message, details)
         if self._restore_project_after_processing():
+            backup = self._last_resegmentation_backup
+            self._last_resegmentation_backup = None
+            if backup:
+                message += f" The previous results remain available in {backup}."
             self._error("Transcription could not continue", message, details)
 
     def _restore_project_after_processing(self) -> bool:
@@ -550,7 +676,7 @@ class MainWindow(QMainWindow):
         self._thread = None
 
     def _set_processing_busy(self, busy: bool) -> None:
-        for name in ("Open document", "Open project", "Transcribe", "Export"):
+        for name in ("Open document", "Open project", "Transcribe", "Re-segment", "Export"):
             self.actions[name].setEnabled(not busy)
 
     @Slot()

@@ -24,7 +24,7 @@ yet a measured published requirement.
 2. Follow the ordinary per-user installation steps and launch KurrentScholar.
 3. Confirm the one-time handwriting-model download (1,340,570,347 required bytes at the pinned revision).
 4. Open a historical PDF, PNG, JPEG, or TIFF and create a local research project.
-5. Select **Transcribe**. The page is segmented into lines; only line crops reach TrOCR.
+5. Select **Transcribe**. The page is segmented into individual lines; only line crops reach TrOCR.
 6. Compare source-line overlays with the editable text and review uncertain passages.
 7. Save and reopen the SQLite project; export corrected or original machine text.
 
@@ -34,7 +34,7 @@ checkpoint is [dh-unibe/trocr-kurrent](https://huggingface.co/dh-unibe/trocr-kur
 
 ## Current functionality
 
-- Incremental PDF/image rendering and horizontal line segmentation with source coordinates.
+- Incremental PDF/image rendering and ink-profile/valley line segmentation with source coordinates.
 - Real local TrOCR inference using safetensors, CPU fallback, beam transition scores, and truncation flags.
 - Native two-panel Qt review UI, background transcription, cancellation, autosave, line overlays, manual
   correction and verification.
@@ -42,10 +42,14 @@ checkpoint is [dh-unibe/trocr-kurrent](https://huggingface.co/dh-unibe/trocr-kur
 - UTF-8 text, Word, formula-safe CSV, and provenance-rich JSON exports.
 - CER/WER evaluation utility and unit tests; Windows build/installer workflow.
 
-The included OpenCV segmenter is a packageable fallback for predominantly horizontal, single-column
-pages. It is not equivalent to a validated learned historical-layout model and may miss marginalia,
-columns, curves, tables, or crossed text. Missed handwriting and confident recognition errors remain
-possible. See [the current plan](PLAN.md) before using this pre-release software for research.
+The included OpenCV segmenter is a packageable fallback for predominantly horizontal pages. It detects
+line centres independently so descenders and flourishes do not create multi-line blocks, and can keep
+spatially separated regions on the same row separate. It is not equivalent to a validated learned
+historical-layout model and may still miss marginalia, complex columns, curves, tables, crossed text, or
+decorative marks. Missed handwriting and confident recognition errors remain possible. Existing projects
+made by an older detector can be migrated with **Re-segment**; KurrentScholar creates a separate backup
+before replacing their derived boxes and transcriptions. See [the current plan](PLAN.md) before using this
+pre-release software for research.
 
 ## Running from source (developers)
 

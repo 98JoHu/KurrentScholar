@@ -17,8 +17,9 @@ Qt UI -> processing service -> renderer -> segmenter -> recognizer
 - `domain.py`: stable value objects (`BoundingBox`, `LineRecord`, confidence and review states).
 - `document_processing`: bounded PDF/image decoding, page selection, preprocessing, and orchestration.
 - `segmentation`: `SegmentationBackend` protocol. The included OpenCV projection backend detects
-  horizontal line bands and connected extents. It is deterministic and packageable on Windows, but
-  not equivalent to a learned historical-layout model.
+  independent ink-density peaks, separates them at projection valleys, and derives connected extents
+  within each line region. It is deterministic and packageable on Windows, but not equivalent to a
+  learned historical-layout model.
 - `recognition`: backend protocol, pinned model manifest/installer, and TrOCR adapter. The adapter
   accepts only a line image and loads with `local_files_only=True` and `use_safetensors=True`.
 - `projects`: schema-versioned SQLite. `machine_text` and model scores are never overwritten when
@@ -43,9 +44,10 @@ strictly local afterward.
 ### ADR-003: fallback segmentation is replaceable
 
 Kraken is powerful, but its Windows/native dependency surface and separate model selection need clean
-build validation. The first shippable backend uses OpenCV morphology/projection. Every line retains a
-bounding box and can be reprocessed individually. A learned backend can implement the protocol without
-changing projects or recognition.
+build validation. The first shippable backend uses OpenCV projection peaks and valleys. Every line
+retains a bounding box and can be reprocessed individually. Detector versions are stored in the project;
+incompatible results require an explicit backed-up reset instead of ordinal reuse. A learned backend can
+implement the protocol without changing recognition.
 
 ### ADR-004: confidence is evidence, not accuracy
 

@@ -63,6 +63,24 @@ def test_project_creation_requires_explicit_overwrite(tmp_path):
     replacement.close()
 
 
+def test_project_backup_and_transcription_reset_preserve_source(tmp_path):
+    path, project, line_id = make_project(tmp_path)
+    project.correct_line(line_id, "human reading")
+    project.set_review_status(line_id, ReviewStatus.VERIFIED)
+    summary = project.transcription_summary()
+    assert summary == {"line_count": 1, "corrected_count": 1, "reviewed_count": 1}
+
+    backup_path = tmp_path / "research.before-resegment.ksproj"
+    project.backup_to(backup_path)
+    project.reset_transcription()
+
+    assert project.document() is not None
+    assert project.lines() == []
+    with ProjectDatabase(backup_path) as backup:
+        assert backup.line(line_id).display_text == "human reading"
+    project.close()
+
+
 def test_exports_are_utf8_structured_and_csv_safe(tmp_path):
     _, project, _ = make_project(tmp_path)
     text = tmp_path / "out.txt"

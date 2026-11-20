@@ -13,6 +13,11 @@ A page with no detected lines is marked as a segmentation failure;
 this is not evidence that the page is blank. Edits are stored separately from the original machine output.
 Mark a line verified only after comparison with the manuscript.
 
+Choose **Re-segment** after a line-detector update or when you deliberately want to replace all current
+boxes and OCR output. KurrentScholar first creates a timestamped `.ksproj` backup beside the open project.
+Corrections and review decisions remain available in that backup but are not automatically transferable
+to changed line geometry.
+
 Exports can use corrected or machine text and retain page/line information. CSV cells beginning with
 spreadsheet formula characters are neutralized. JSON contains model/software provenance and both text
 versions. DOCX uncertainty is a review aid, not calibrated accuracy.

@@ -141,6 +141,22 @@ class ProjectDatabase:
             self.connection.close()
             self.connection = None
 
+    def backup_to(self, destination: str | Path) -> Path:
+        """Create a consistent SQLite backup, including data still held in WAL."""
+
+        target_path = Path(destination)
+        if target_path.resolve() == self.path.resolve():
+            raise ValueError("The backup path must differ from the project path")
+        if target_path.exists():
+            raise FileExistsError(f"Backup already exists: {target_path}")
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target = sqlite3.connect(target_path)
+        try:
+            self.connection.backup(target)
+        finally:
+            target.close()
+        return target_path
+
     def __enter__(self) -> ProjectDatabase:
         return self
 
@@ -317,4 +333,27 @@ class ProjectDatabase:
 
     def info(self) -> dict[str, str]:
         return dict(self.connection.execute("SELECT key,value FROM project_info"))
+
+    def transcription_summary(self) -> dict[str, int]:
+        row = self.connection.execute(
+            """SELECT COUNT(*) AS line_count,
+                      SUM(CASE WHEN corrected_text IS NOT NULL THEN 1 ELSE 0 END) AS corrected_count,
+                      SUM(CASE WHEN review_status != 'unreviewed' THEN 1 ELSE 0 END) AS reviewed_count
+               FROM lines"""
+        ).fetchone()
+        return {
+            "line_count": int(row["line_count"] or 0),
+            "corrected_count": int(row["corrected_count"] or 0),
+            "reviewed_count": int(row["reviewed_count"] or 0),
+        }
+
+    def reset_transcription(self) -> None:
+        """Remove derived page/line results while retaining the source and metadata."""
+
+        with self.connection:
+            # Lines and correction history are removed by foreign-key cascades.
+            self.connection.execute("DELETE FROM pages")
+            self.connection.execute(
+                "DELETE FROM project_info WHERE key IN ('segmentation_backend','segmentation_version')"
+            )
 

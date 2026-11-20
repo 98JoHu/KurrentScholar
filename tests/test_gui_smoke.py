@@ -90,3 +90,33 @@ def test_model_failure_is_delivered_on_gui_thread(qtbot, monkeypatch):
     assert window._install_progress is None
     assert window.actions["Install model"].isEnabled()
 
+
+@pytest.mark.gui
+def test_resegmentation_creates_backup_before_reset(qtbot, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QMessageBox
+
+    from kurrentscholar.domain import BoundingBox
+    from kurrentscholar.projects import ProjectDatabase
+    from kurrentscholar.ui.main_window import MainWindow
+
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"source")
+    project_path = tmp_path / "research.ksproj"
+    project = ProjectDatabase(project_path, create=True)
+    project.set_document(source, 1)
+    project.upsert_page(1, 1000, 1500, 300)
+    project.add_line(1, 0, BoundingBox(10, 20, 300, 40), "old result", 0.8, [], [])
+
+    window = MainWindow(offer_model_on_startup=False)
+    qtbot.addWidget(window)
+    window.project = project
+    window.project_path = project_path
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args, **_kwargs: QMessageBox.Yes)
+
+    assert window._backup_and_reset_transcription("Detector changed.")
+    assert project.lines() == []
+    backups = list(tmp_path.glob("research.before-resegment-*.ksproj"))
+    assert len(backups) == 1
+    with ProjectDatabase(backups[0]) as backup:
+        assert backup.lines()[0].machine_text == "old result"
+

@@ -16,14 +16,16 @@ heruntergeladen. Danach funktioniert die Transkription offline. Dokumente werden
 1. Windows-Installationsdatei aus GitHub Releases öffnen (sobald geprüft veröffentlicht).
 2. KurrentScholar starten und den einmaligen Modelldownload bestätigen.
 3. PDF-, PNG-, JPEG- oder TIFF-Datei öffnen und ein lokales Projekt anlegen.
-4. **Transkribieren** wählen; Seiten werden in Zeilen zerlegt und nur Zeilen an TrOCR übergeben.
+4. **Transkribieren** wählen; Seiten werden in einzelne Zeilen zerlegt und nur Zeilen an TrOCR übergeben.
 5. Unsichere Zeilen prüfen, Text korrigieren und als geprüft markieren.
 6. Projekt erneut öffnen oder als TXT, DOCX, CSV beziehungsweise JSON exportieren.
 
-Die derzeitige OpenCV-Zeilenerkennung ist ein transparenter Ersatz für überwiegend waagerechte,
-einspaltige Seiten. Randnotizen, Spalten, Tabellen und gekrümmte Zeilen können fehlen. Auch hohe
-Modellkonfidenz garantiert keine richtige Lesung. Details stehen im [Projektplan](PLAN.md), in der
-[Datenschutzerklärung](docs/PRIVACY.md) und im [Benutzerhandbuch](docs/USER_GUIDE.md).
+Die derzeitige OpenCV-Zeilenerkennung trennt benachbarte Zeilen anhand ihrer Tintenprofile, sodass
+Unterlängen und Schnörkel nicht mehr ganze Textblöcke verbinden. Randnotizen, komplexe Spalten, Tabellen
+und gekrümmte Zeilen können weiterhin fehlen. Nach einer Aktualisierung der Zeilenerkennung legt
+**Re-segment** zuerst eine Sicherung des Projekts an. Auch hohe Modellkonfidenz garantiert keine
+richtige Lesung. Details stehen im [Projektplan](PLAN.md), in der [Datenschutzerklärung](docs/PRIVACY.md)
+und im [Benutzerhandbuch](docs/USER_GUIDE.md).
 
 Das Erkennungsmodell `dh-unibe/trocr-kurrent` wurde unabhängig von Jonas Widmer und Tobias Hodel im
 Zusammenwirken mit den im Modellsteckbrief genannten Forschenden und Institutionen entwickelt. Es muss

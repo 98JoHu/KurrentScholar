@@ -4,12 +4,24 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kurrentscholar"
-version = "0.1.3.dev0"
+version = "0.1.3"
 description = "Offline-first desktop transcription for historical German Kurrent manuscripts"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = {file = "LICENSE"}
-authors = [{name = "KurrentScholar contributors"}]
+authors = [{name = "Jonas Hummel", email = "jonas.hummel@kit.edu"}]
+maintainers = [{name = "Jonas Hummel", email = "jonas.hummel@kit.edu"}]
+keywords = ["handwriting recognition", "Kurrent", "HTR", "digital humanities", "TrOCR"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Win32 (MS Windows)",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows :: Windows 10",
+  "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
   "huggingface-hub==0.28.1",
   "numpy==1.26.4",
@@ -38,6 +50,12 @@ dev = [
 [project.scripts]
 kurrentscholar = "kurrentscholar.app:main"
 kurrentscholar-evaluate = "kurrentscholar.evaluation:main"
+
+[project.urls]
+Homepage = "https://github.com/98JoHu/KurrentScholar"
+Documentation = "https://github.com/98JoHu/KurrentScholar#readme"
+Issues = "https://github.com/98JoHu/KurrentScholar/issues"
+Source = "https://github.com/98JoHu/KurrentScholar"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kurrentscholar"]

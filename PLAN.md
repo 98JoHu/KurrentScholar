@@ -89,5 +89,5 @@ Acceptance: dependency license audit and accessible bilingual workflow review ar
 1. No fabricated benchmark, screenshot, installer, signature, DOI, or download URL.
 2. No document network transfer; only explicit model installation may use the network.
 3. Clean-machine installer evidence and real-model line test are mandatory for a public stable release.
-4. Maintainer must replace all publication placeholders in `CITATION.cff` and documentation.
+4. Release version, changelog, citation metadata, installer metadata, and published checksums must agree.
 

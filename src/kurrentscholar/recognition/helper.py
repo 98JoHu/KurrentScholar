@@ -9,7 +9,8 @@ INTENT_RESPONSES = {
     "pages": (
         "Use Transcription > Transcribe current page, Transcribe page range…, or Transcribe full "
         "document. A range accepts forms such as 3-5,8. Existing completed lines are preserved, "
-        "and new lines appear live while later pages continue."
+        "and new lines appear live while later pages continue. Use View > Go to page… or the "
+        "toolbar page selector to jump directly to a page."
     ),
     "models": (
         "Open Models > Model Manager. It shows which pinned models are installed, partial or "
@@ -17,7 +18,7 @@ INTENT_RESPONSES = {
         "project open, Use for open project safely backs up results before changing models."
     ),
     "export": (
-        "Open File > Export and choose plain text, Word, CSV, Excel, or research JSON. Word is best "
+        "Open the Export menu and choose plain text, Word, CSV, Excel, or research JSON. Word is best "
         "for reading; CSV/Excel for analysis; JSON preserves the richest provenance and coordinates."
     ),
     "confidence": (
@@ -26,7 +27,7 @@ INTENT_RESPONSES = {
     ),
     "ground_truth": (
         "Correct every detected line on representative reference pages and mark each verified. Then "
-        "use Review > Export ground-truth bundle…. The ZIP records reference and target pages, line "
+        "use Export > Export ground-truth bundle…. The ZIP records reference and target pages, line "
         "crops, labels, source checksum, and base model for external CUDA fine-tuning."
     ),
     "diagnostics": (

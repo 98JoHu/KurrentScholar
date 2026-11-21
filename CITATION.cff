@@ -1,25 +1,25 @@
 cff-version: 1.2.0
-message: "If you use KurrentScholar, cite the software release and the underlying TrOCR Kurrent model separately."
-title: "KurrentScholar"
+message: "If you use KurrentScholar, please cite this software release and the recognition model recorded in your project separately."
+title: "KurrentScholar: Offline Historical Kurrent Handwriting Transcription"
 type: software
-version: "0.1.0-dev"
-date-released: "2026-11-19"
+version: "0.1.3"
+date-released: "2026-11-21"
 authors:
-  - family-names: "TO BE PROVIDED"
-    given-names: "Maintainer"
-repository-code: "https://github.com/TO-BE-PROVIDED/KurrentScholar"
-url: "https://github.com/TO-BE-PROVIDED/KurrentScholar"
+  - family-names: "Hummel"
+    given-names: "Jonas"
+    orcid: "https://orcid.org/0009-0005-8563-6175"
+    affiliation: "Karlsruhe Institute of Technology (KIT)"
+    email: "jonas.hummel@kit.edu"
+repository-code: "https://github.com/98JoHu/KurrentScholar"
+url: "https://github.com/98JoHu/KurrentScholar"
 license: MIT
-identifiers:
-  - type: other
-    value: "SOFTWARE-DOI-TO-BE-PROVIDED"
-    description: "Replace after archiving a versioned release"
-preferred-citation:
-  type: software
-  title: "KurrentScholar"
-  authors:
-    - family-names: "TO BE PROVIDED"
-      given-names: "Maintainer"
-  version: "0.1.0-dev"
-  year: 2026
+keywords:
+  - "handwritten text recognition"
+  - "Kurrent"
+  - "digital humanities"
+  - "TrOCR"
+abstract: >-
+  KurrentScholar is an offline-first Windows desktop application for segmenting,
+  transcribing, reviewing, and exporting historical German Kurrent manuscripts
+  with local open recognition models and provenance-preserving research projects.
 

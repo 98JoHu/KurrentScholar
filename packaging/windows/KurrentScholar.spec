@@ -16,6 +16,7 @@ datas = (
     + collect_data_files("certifi")
     + copy_metadata("huggingface-hub")
     + copy_metadata("transformers")
+    + [(str(root / "src" / "kurrentscholar" / "assets" / "kurrentscholar-logo.png"), "kurrentscholar/assets")]
 )
 binaries = collect_dynamic_libs("torch") + collect_dynamic_libs("pypdfium2")
 hiddenimports = [
@@ -47,6 +48,8 @@ exe = EXE(
     exclude_binaries=True,
     name="KurrentScholar",
     console=False,
+    icon=str(root / "assets" / "branding" / "kurrentscholar.ico"),
+    version=str(root / "packaging" / "windows" / "version_info.txt"),
     disable_windowed_traceback=False,
 )
 coll = COLLECT(

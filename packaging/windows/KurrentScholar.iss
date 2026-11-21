@@ -1,6 +1,7 @@
 #define MyAppName "KurrentScholar"
-#define MyAppVersion "0.1.3-dev"
-#define MyAppPublisher "KurrentScholar contributors"
+#define MyAppVersion "0.1.3"
+#define MyAppPublisher "Jonas Hummel"
+#define MyAppURL "https://github.com/98JoHu/KurrentScholar"
 #define MyAppExeName "KurrentScholar.exe"
 
 [Setup]
@@ -8,6 +9,13 @@ AppId={{E13775A4-89A2-44A9-BCA0-FE08052A2353}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppURL}
+AppSupportURL="https://github.com/98JoHu/KurrentScholar/issues"
+AppUpdatesURL="https://github.com/98JoHu/KurrentScholar/releases/latest"
+VersionInfoCompany={#MyAppPublisher}
+VersionInfoDescription="KurrentScholar Windows installer"
+VersionInfoProductName={#MyAppName}
+VersionInfoProductVersion={#MyAppVersion}
 DefaultDirName={localappdata}\Programs\KurrentScholar
 DefaultGroupName=KurrentScholar
 PrivilegesRequired=lowest
@@ -20,6 +28,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
 UninstallDisplayIcon={app}\KurrentScholar.exe
+SetupIconFile=..\..\assets\branding\kurrentscholar.ico
 LicenseFile=..\..\LICENSE
 SetupLogging=yes
 

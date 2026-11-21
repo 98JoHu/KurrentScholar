@@ -6,19 +6,28 @@ Kurrentschrift. Manuskripte, Metadaten und Korrekturen bleiben auf dem eigenen R
 > **Für veröffentlichte Installationspakete sind weder Python noch Programmierkenntnisse, API-Schlüssel,
 > Benutzerkonto oder kostenpflichtiges KI-Abonnement erforderlich.**
 
-Das Projekt befindet sich in der Vorabentwicklung. Ein auf einem sauberen Windows-System geprüftes
-Installationsprogramm wird erst nach erfolgreicher Abnahme auf GitHub Releases bereitgestellt. Beim
-ersten Start wird das getrennte, etwa 1,34 GB große Erkennungsmodell nach ausdrücklicher Bestätigung
-heruntergeladen. Danach funktioniert die Transkription offline. Dokumente werden nicht hochgeladen.
+Das aktuelle Installationsprogramm steht auf der
+[GitHub-Releases-Seite](https://github.com/98JoHu/KurrentScholar/releases/latest) und über den
+[direkten Windows-Download](https://github.com/98JoHu/KurrentScholar/releases/latest/download/KurrentScholar-Setup-Windows-x64.exe)
+bereit. Die Datei ist derzeit nicht codesigniert; bitte URL und die veröffentlichte SHA-256-Prüfsumme
+kontrollieren. Beim ersten Start wird das getrennte, etwa 1,34 GB große Erkennungsmodell nach
+ausdrücklicher Bestätigung heruntergeladen. Danach funktioniert die Transkription offline. Dokumente
+werden nicht hochgeladen.
 
 ## Arbeitsablauf
 
-1. Windows-Installationsdatei aus GitHub Releases öffnen (sobald geprüft veröffentlicht).
+1. Windows-Installationsdatei aus GitHub Releases herunterladen und Prüfsumme vergleichen.
 2. KurrentScholar starten und den einmaligen Modelldownload bestätigen.
 3. PDF-, PNG-, JPEG- oder TIFF-Datei öffnen und ein lokales Projekt anlegen.
-4. **Transkribieren** wählen; Seiten werden in einzelne Zeilen zerlegt und nur Zeilen an TrOCR übergeben.
-5. Unsichere Zeilen prüfen, Text korrigieren und als geprüft markieren.
-6. Projekt erneut öffnen oder als TXT, DOCX, CSV beziehungsweise JSON exportieren.
+4. Aktuelle Seite, Seitenbereich oder gesamtes Dokument transkribieren; nur erkannte Zeilen werden an
+   TrOCR übergeben.
+5. Ergebnisse während der Verarbeitung prüfen, Text korrigieren und als geprüft markieren.
+6. Das automatisch gespeicherte Projekt erneut öffnen oder als TXT, DOCX, CSV, XLSX beziehungsweise JSON
+   exportieren.
+
+Fehler und Funktionswünsche können über
+[GitHub Issues](https://github.com/98JoHu/KurrentScholar/issues) oder per E-Mail an
+[Jonas Hummel](mailto:jonas.hummel@kit.edu) am Karlsruher Institut für Technologie (KIT) gemeldet werden.
 
 Die derzeitige OpenCV-Zeilenerkennung trennt benachbarte Zeilen anhand ihrer Tintenprofile, sodass
 Unterlängen und Schnörkel nicht mehr ganze Textblöcke verbinden. Randnotizen, komplexe Spalten, Tabellen

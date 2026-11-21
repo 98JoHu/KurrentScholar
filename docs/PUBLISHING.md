@@ -1,18 +1,17 @@
 # Publishing and archiving
 
-1. Create a public GitHub repository under the maintainer's chosen account and replace every
-   `TO-BE-PROVIDED` value. Do not publish until archival fixtures and licenses are reviewed.
-2. Push source only; confirm `.gitignore` excludes weights, projects, caches, documents, and binaries.
-3. Protect the default branch and require CI. Create a signed source tag only after updating version,
-   changelog, citation, and lock file.
-4. Run the Windows artifact workflow, verify its SHA-256, then perform install/start/model-download/
-   import/transcribe/save/reopen/export/uninstall acceptance on a clean Windows x64 VM without Python.
-5. Create a GitHub release and attach only the tested installer and checksum. State that it is unsigned
-   unless it has actually been signed. Never fabricate download links.
-6. Enable the repository in Zenodo, create the GitHub release, let Zenodo archive it, then reserve/publish
-   the record after reviewing metadata. Put the real version DOI in `CITATION.cff`; use the concept DOI
-   for all-version references and the version DOI for reproducible citations.
-
-Before publication the maintainer must supply their name, ORCID (optional), institution, repository URL,
-support/security contacts, release license decision, software DOI, and any code-signing identity.
+1. Confirm the version matches in `pyproject.toml`, `src/kurrentscholar/__init__.py`,
+   `packaging/windows/KurrentScholar.iss`, `CITATION.cff`, and the changelog.
+2. Run `uv lock --check`, `uv run ruff check .`, and `uv run pytest -m "not real_model"`.
+3. Build locally and run `dist/KurrentScholar/KurrentScholar.exe --smoke-test`. Compile the installer and
+   verify its SHA-256.
+4. Install/start/import/transcribe/save/reopen/export/uninstall on a clean Windows 10 or 11 x64 VM without
+   Python. Confirm a real model installation and open DOCX/XLSX exports in Microsoft Office.
+5. Commit and push, then create an annotated tag such as `v0.1.3` at that exact commit. Pushing the tag
+   runs the Windows release workflow; after tests and the packaged smoke test pass, it creates the GitHub
+   Release and attaches the stable-name installer plus `SHA256SUMS.txt`.
+6. Download the published asset through the README's direct link and compare its hash. The installer is
+   unsigned unless a protected code-signing step has actually been configured.
+7. Optionally enable the repository in Zenodo before the next release. Add a DOI to `CITATION.cff` only
+   after the archival record exists; never publish a placeholder DOI.
 

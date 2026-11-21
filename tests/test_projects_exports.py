@@ -118,6 +118,14 @@ def test_exports_are_utf8_structured_and_csv_safe(tmp_path):
     assert workbook["Transcription"]["F2"].value == "'=machine"
     assert workbook["Provenance"]["B6"].value == project.document()["sha256"]
     workbook.close()
+    import zipfile
+
+    with zipfile.ZipFile(excel) as package:
+        worksheet_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        table_xml = package.read("xl/tables/table1.xml").decode("utf-8")
+    assert "<autoFilter" not in worksheet_xml
+    assert "<autoFilter" in table_xml
+    assert 't="inlineStr"></c>' not in worksheet_xml
     project.close()
 
 

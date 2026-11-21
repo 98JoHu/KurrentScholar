@@ -1,6 +1,20 @@
 # Changelog
 
-## 0.1.3-dev — unreleased
+## 0.1.3 — 2026-11-21
+
+- Fixed Excel repair warnings by removing the duplicate worksheet/table AutoFilter declaration and
+  omitting empty inline-string cells; validated the repaired output in desktop Microsoft Excel.
+- Added the KurrentScholar Kurrent-letter logo to the application, Windows executable, installer, and
+  repository documentation.
+- Added complete maintainer/citation metadata and tagged-release automation that publishes the tested
+  installer and SHA-256 checksum as directly downloadable GitHub Release assets.
+
+- Reworked onboarding into a control-anchored spotlight tour beginning with a clear welcome and purpose;
+  redesigned the local helper as an upper-right KurrentBot launcher with a persistent right-side chat panel.
+- Added a top-level Export menu and toolbar entry, direct page-number navigation, and a persistent Auto Save
+  toggle that defaults on.
+- Fixed transient live-transcription box misalignment by applying the 300-DPI detection-to-150-DPI viewer
+  transform as soon as page geometry is stored; hovering a transcription now highlights its source box.
 
 - Added current-page, page-range, and full-document transcription. The project remains open through
   SQLite WAL while processing, so committed lines appear live and completed pages remain navigable/editable.

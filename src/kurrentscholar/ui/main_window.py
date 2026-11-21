@@ -11,6 +11,7 @@ from PIL.ImageQt import ImageQt
 from PySide6.QtCore import QObject, QRectF, QSettings, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QDockWidget,
     QFileDialog,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
@@ -25,6 +26,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QSizePolicy,
+    QSpinBox,
     QSplitter,
     QTextEdit,
     QToolBar,
@@ -59,12 +62,38 @@ from kurrentscholar.recognition import ModelManager, TrOCRBackend
 from kurrentscholar.segmentation import ProjectionSegmenter
 from kurrentscholar.ui.dialogs import (
     GroundTruthDialog,
-    LocalHelpDialog,
+    LocalHelpPanel,
     ModelManagerDialog,
-    TutorialDialog,
+    TutorialOverlay,
 )
 
 LOGGER = logging.getLogger(f"{APP_NAME}.ui")
+
+
+class LineListWidget(QListWidget):
+    """Line list that reports hover changes for synchronized page highlighting."""
+
+    line_hovered = Signal(object)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self._last_hovered_id: int | None = None
+
+    def mouseMoveEvent(self, event) -> None:
+        item = self.itemAt(event.position().toPoint())
+        line_id = int(item.data(Qt.UserRole)) if item else None
+        if line_id != self._last_hovered_id:
+            self._last_hovered_id = line_id
+            self.line_hovered.emit(line_id)
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if self._last_hovered_id is not None:
+            self._last_hovered_id = None
+            self.line_hovered.emit(None)
+        super().leaveEvent(event)
 
 
 class ProcessingWorker(QObject):
@@ -262,7 +291,10 @@ class MainWindow(QMainWindow):
         self._install_progress_timer: QTimer | None = None
         self._install_phase = "idle"
         self._model_manager_dialog: ModelManagerDialog | None = None
-        self._help_dialog: LocalHelpDialog | None = None
+        self._help_dialog: LocalHelpPanel | None = None
+        self._helper_dock: QDockWidget | None = None
+        self._tutorial_overlay: TutorialOverlay | None = None
+        self._tutorial_targets: dict[str, QWidget] = {}
         self._last_resegmentation_backup: Path | None = None
         self._edit_timer = QTimer(self)
         self._edit_timer.setSingleShot(True)
@@ -270,6 +302,8 @@ class MainWindow(QMainWindow):
         self._edit_timer.timeout.connect(self.save_current_edit)
         self._display_scale_x = 1.0
         self._display_scale_y = 1.0
+        self._hovered_line_id: int | None = None
+        self.autosave_enabled = QSettings().value("editor/autosave", True, type=bool)
         self.actions: dict[str, QAction] = {}
         self._overlays: list[QGraphicsRectItem] = []
         self._build_ui()
@@ -288,9 +322,10 @@ class MainWindow(QMainWindow):
         self.pixmap_item = QGraphicsPixmapItem()
         self.scene.addItem(self.pixmap_item)
 
-        self.line_list = QListWidget()
+        self.line_list = LineListWidget()
         self.line_list.setObjectName("lineList")
         self.line_list.currentItemChanged.connect(self._select_line)
+        self.line_list.line_hovered.connect(self._hover_line)
         self.editor = QTextEdit()
         self.editor.setObjectName("transcriptionEditor")
         self.editor.setPlaceholderText("Select a line to review or correct its transcription.")
@@ -318,6 +353,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right)
         splitter.setSizes([760, 520])
         self.setCentralWidget(splitter)
+        self._tutorial_targets["review"] = right
         self.statusBar().showMessage("Ready")
 
     def _apply_style(self) -> None:
@@ -337,11 +373,30 @@ class MainWindow(QMainWindow):
             QToolButton:hover, QPushButton:hover { background: #E7D7D5; }
             QToolButton:pressed, QPushButton:pressed { background: #D9C2BF; }
             QToolButton:disabled, QPushButton:disabled { background: #EEF0F3; color: #9AA2AB; border-color: #E1E5E9; }
+            QToolButton#helperLauncher { background: #9A6F6B; color: #FFFFFF; border: 0; border-radius: 16px; padding: 8px 14px; }
+            QToolButton#helperLauncher:hover, QToolButton#helperLauncher:checked { background: #795451; }
             QGraphicsView, QListWidget, QTextEdit, QTextBrowser, QTableWidget, QLineEdit { background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 12px; selection-background-color: #DCC8C5; selection-color: #20252B; }
             QGraphicsView { margin: 8px 4px 8px 8px; }
             QWidget#reviewCard { background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 18px; }
             QLabel#contextStatus { color: #56616D; padding: 8px 4px; }
             QLabel#tutorialHeading { font-size: 24px; font-weight: 700; color: #5E3F3C; }
+            QFrame#tutorialCard { background: #FFFFFF; border: 1px solid #D9DEE5; border-radius: 18px; }
+            QLabel#tutorialKicker { color: #9A6F6B; font-size: 11px; font-weight: 800; }
+            QLabel#tutorialBody { color: #4F5B66; font-size: 14px; }
+            QLabel#tutorialProgress { color: #7A858F; font-weight: 600; }
+            QDockWidget#helperDock { background: #FFFFFF; border-left: 1px solid #DDE3EA; }
+            QWidget#helperPanel { background: #FFFFFF; }
+            QLabel#helperAvatar { background: #9A6F6B; color: #FFFFFF; border-radius: 18px; min-width: 36px; min-height: 36px; max-width: 36px; max-height: 36px; font-size: 18px; font-weight: 800; }
+            QLabel#helperTitle { color: #313840; font-size: 17px; font-weight: 750; }
+            QLabel#helperSubtitle, QLabel#helperNotice { color: #75808B; font-size: 11px; }
+            QPushButton#helperHeaderButton { background: transparent; border: 0; color: #5E6872; font-size: 21px; padding: 3px 7px; }
+            QPushButton#helperHeaderButton:hover { background: #F0E7E6; }
+            QScrollArea#helperMessages, QWidget#helperMessageHost { background: #F7F8FA; border: 0; border-radius: 14px; }
+            QLabel#helperBotMessage { background: #9A6F6B; color: #FFFFFF; border-radius: 13px; padding: 10px 12px; }
+            QLabel#helperUserMessage { background: #F0E7E6; color: #3F3433; border: 1px solid #DECBC9; border-radius: 13px; padding: 10px 12px; }
+            QLineEdit#helperInput { padding: 9px 11px; border-radius: 15px; }
+            QPushButton#helperSend { background: #9A6F6B; color: #FFFFFF; border: 0; border-radius: 14px; }
+            QSpinBox { background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 9px; padding: 6px 8px; min-width: 112px; }
             QProgressDialog { background: #F4F7FB; }
             QHeaderView::section { background: #F0E7E6; color: #5E3F3C; padding: 7px; border: 0; border-right: 1px solid #DECBC9; font-weight: 600; }
             QStatusBar { background: #FFFFFF; border-top: 1px solid #E2E7ED; color: #68737E; }
@@ -351,14 +406,75 @@ class MainWindow(QMainWindow):
     def _run_onboarding(self) -> None:
         settings = QSettings()
         if not settings.value("onboarding/tutorial_seen", False, type=bool):
-            TutorialDialog(self).exec()
-            settings.setValue("onboarding/tutorial_seen", True)
-        if not self.model_manager.status().installed:
+            self._start_tutorial(first_run=True)
+        elif not self.model_manager.status().installed:
             self._offer_model_installation()
 
     @Slot()
     def show_tutorial(self) -> None:
-        TutorialDialog(self).exec()
+        self._start_tutorial(first_run=False)
+
+    def _start_tutorial(self, *, first_run: bool) -> None:
+        if self._tutorial_overlay:
+            self._tutorial_overlay.show()
+            self._tutorial_overlay.raise_()
+            return
+        steps = [
+            (
+                "Welcome to KurrentScholar",
+                "KurrentScholar helps you turn scanned historical German handwriting into an "
+                "editable, reviewable transcription on this computer. Open a manuscript, choose "
+                "which pages to process, compare every detected line with the image, and export a "
+                "research-ready result. Let’s take a quick tour of the workspace.",
+                None,
+            ),
+            (
+                "Start with a manuscript",
+                "Open a PDF or archival image here. KurrentScholar creates a .ksproj research "
+                "project beside your source so transcription, corrections, and review status can "
+                "be reopened later.",
+                self._tutorial_targets.get("open"),
+            ),
+            (
+                "Navigate and choose the scope",
+                "Use Previous, Next, or the page selector to move directly to any page. The "
+                "Transcribe menu can process the current page, a page range, or the full document.",
+                self._tutorial_targets.get("transcribe"),
+            ),
+            (
+                "Review results while they arrive",
+                "Recognized lines appear here during transcription. Select or hover over a line to "
+                "highlight its box on the manuscript, correct the text, and mark it verified only "
+                "after comparing it with the image.",
+                self._tutorial_targets.get("review"),
+            ),
+            (
+                "Export your work",
+                "Export is a dedicated menu and toolbar control. Choose plain text, Word, CSV, "
+                "Excel, or research JSON; verified line crops for external fine-tuning are available "
+                "there as a separate ground-truth bundle.",
+                self._tutorial_targets.get("export"),
+            ),
+            (
+                "Ask KurrentBot",
+                "Open the local helper from the upper right whenever you need guidance. Its "
+                "conversation stays beside the workspace, and it does not need manuscript text. "
+                "You can replay this tour later from Help > Tutorial.",
+                self._tutorial_targets.get("helper"),
+            ),
+        ]
+        overlay = TutorialOverlay(steps, self)
+        self._tutorial_overlay = overlay
+
+        def completed() -> None:
+            self._tutorial_overlay = None
+            if first_run:
+                QSettings().setValue("onboarding/tutorial_seen", True)
+                if not self.model_manager.status().installed:
+                    QTimer.singleShot(100, self._offer_model_installation)
+
+        overlay.finished.connect(completed)
+        overlay.show()
 
     def _build_actions(self) -> None:
         def action(name, callback, shortcut=None, tip=""):
@@ -375,6 +491,7 @@ class MainWindow(QMainWindow):
         open_project = action("Open project", self.open_project, "Ctrl+Shift+O")
         previous = action("Previous page", lambda: self._change_page(-1), "PgUp")
         next_page = action("Next page", lambda: self._change_page(1), "PgDown")
+        go_to_page = action("Go to page…", self.go_to_page, "Ctrl+G")
         current = action("Transcribe current page", self.transcribe_current_page, "Ctrl+T")
         page_range = action("Transcribe page range…", self.transcribe_page_range, "Ctrl+Shift+T")
         all_pages = action("Transcribe full document", self.transcribe_all)
@@ -384,6 +501,10 @@ class MainWindow(QMainWindow):
         manage_models = action("Model Manager", self.show_model_manager)
         self.actions["Install model"] = manage_models
         save = action("Save", self.save_current_edit, QKeySequence.Save)
+        autosave = action("Auto Save", self._set_autosave)
+        autosave.setCheckable(True)
+        autosave.setChecked(self.autosave_enabled)
+        autosave.setStatusTip("Save shortly after typing; enabled by default")
         verify = action("Mark selected line verified", self._verify_line, "Ctrl+Shift+V")
         uncertain = action("Next uncertain line", self._next_uncertain, "F6")
         evaluate = action("Evaluate corrections", self.evaluate_corrections)
@@ -392,21 +513,24 @@ class MainWindow(QMainWindow):
         zoom_out = action("Zoom out", lambda: self.viewer.scale(1 / 1.2, 1 / 1.2), QKeySequence.ZoomOut)
         zoom_fit = action("Fit page", lambda: self.viewer.fitInView(self.pixmap_item, Qt.KeepAspectRatio))
         tutorial = action("Tutorial", self.show_tutorial)
-        local_help = action("Local Help Assistant", self.show_local_help)
+        local_help = action("Ask KurrentBot", self.show_local_help)
         diagnostic = action("Diagnostic log", self.show_diagnostic_log)
         about = action("About", self.about)
 
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addActions([open_document, open_project])
-        export_menu = file_menu.addMenu("Export")
+        file_menu.addSeparator()
+        file_menu.addAction(action("Exit", self.close, QKeySequence.Quit))
+
+        export_menu = self.menuBar().addMenu("&Export")
         for label, suffix in (
             ("Plain text…", ".txt"), ("Word document…", ".docx"),
             ("CSV table…", ".csv"), ("Excel workbook…", ".xlsx"),
             ("Research JSON…", ".json"),
         ):
             export_menu.addAction(action(f"Export {label}", lambda _checked=False, s=suffix: self.export_project(s)))
-        file_menu.addSeparator()
-        file_menu.addAction(action("Exit", self.close, QKeySequence.Quit))
+        export_menu.addSeparator()
+        export_menu.addAction(ground_truth)
 
         transcription_menu = self.menuBar().addMenu("&Transcription")
         transcription_menu.addActions([current, page_range, all_pages])
@@ -414,15 +538,15 @@ class MainWindow(QMainWindow):
         transcription_menu.addAction(resegment)
 
         review_menu = self.menuBar().addMenu("&Review")
-        review_menu.addActions([save, verify, uncertain, evaluate])
+        review_menu.addActions([save, autosave])
         review_menu.addSeparator()
-        review_menu.addAction(ground_truth)
+        review_menu.addActions([verify, uncertain, evaluate])
 
         models_menu = self.menuBar().addMenu("&Models")
         models_menu.addActions([manage_models, select_model])
 
         view_menu = self.menuBar().addMenu("&View")
-        view_menu.addActions([previous, next_page])
+        view_menu.addActions([previous, next_page, go_to_page])
         view_menu.addSeparator()
         view_menu.addActions([zoom_in, zoom_out, zoom_fit])
 
@@ -437,9 +561,21 @@ class MainWindow(QMainWindow):
         self.addToolBar(toolbar)
         toolbar.addAction(open_document)
         toolbar.addAction(open_project)
+        open_widget = toolbar.widgetForAction(open_document)
+        if open_widget:
+            self._tutorial_targets["open"] = open_widget
         toolbar.addSeparator()
         toolbar.addAction(previous)
         toolbar.addAction(next_page)
+        self.page_selector = QSpinBox()
+        self.page_selector.setObjectName("pageSelector")
+        self.page_selector.setKeyboardTracking(False)
+        self.page_selector.setPrefix("Page ")
+        self.page_selector.setRange(1, 1)
+        self.page_selector.setEnabled(False)
+        self.page_selector.setToolTip("Go directly to a page (Ctrl+G)")
+        self.page_selector.valueChanged.connect(self._go_to_page)
+        toolbar.addWidget(self.page_selector)
         toolbar.addSeparator()
         transcribe_button = QToolButton()
         transcribe_button.setText("Transcribe")
@@ -447,29 +583,119 @@ class MainWindow(QMainWindow):
         transcribe_button.setPopupMode(QToolButton.InstantPopup)
         transcribe_button.setMenu(transcription_menu)
         toolbar.addWidget(transcribe_button)
+        self._tutorial_targets["transcribe"] = transcribe_button
         toolbar.addAction(save)
+        export_button = QToolButton()
+        export_button.setText("Export")
+        export_button.setToolTip("Choose an export format")
+        export_button.setPopupMode(QToolButton.InstantPopup)
+        export_button.setMenu(export_menu)
+        toolbar.addWidget(export_button)
+        self._tutorial_targets["export"] = export_button
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+        helper_button = QToolButton()
+        helper_button.setObjectName("helperLauncher")
+        helper_button.setText("?  Ask KurrentBot")
+        helper_button.setToolTip("Open the local KurrentScholar helper")
+        helper_button.setCheckable(True)
+        helper_button.clicked.connect(self.show_local_help)
+        toolbar.addWidget(helper_button)
+        self.helper_button = helper_button
+        self._tutorial_targets["helper"] = helper_button
+        self._build_helper_dock()
         self._update_navigation_actions()
+
+    def _build_helper_dock(self) -> None:
+        panel = LocalHelpPanel(self)
+        panel.install_requested.connect(self._install_selected_model)
+        dock = QDockWidget("KurrentBot", self)
+        dock.setObjectName("helperDock")
+        dock.setAllowedAreas(Qt.RightDockWidgetArea)
+        dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
+        dock.setTitleBarWidget(QWidget())
+        dock.setWidget(panel)
+        dock.setMinimumWidth(370)
+        dock.hide()
+        panel.close_requested.connect(dock.hide)
+        dock.visibilityChanged.connect(self._helper_visibility_changed)
+        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        self._help_dialog = panel
+        self._helper_dock = dock
+
+    @Slot(bool)
+    def _helper_visibility_changed(self, visible: bool) -> None:
+        if hasattr(self, "helper_button"):
+            self.helper_button.blockSignals(True)
+            self.helper_button.setChecked(visible)
+            self.helper_button.blockSignals(False)
+        if visible and self._help_dialog:
+            self._help_dialog.refresh()
+            self._help_dialog.question.setFocus()
 
     def _update_navigation_actions(self) -> None:
         document = self.project.document() if self.project else None
         page_count = int(document["page_count"]) if document else 0
         self.actions["Previous page"].setEnabled(self.current_page > 1)
         self.actions["Next page"].setEnabled(0 < self.current_page < page_count)
+        self.actions["Go to page…"].setEnabled(page_count > 0)
+        if hasattr(self, "page_selector"):
+            self.page_selector.blockSignals(True)
+            self.page_selector.setRange(1, max(1, page_count))
+            self.page_selector.setValue(min(max(1, self.current_page), max(1, page_count)))
+            self.page_selector.setSuffix(f" of {page_count}" if page_count else "")
+            self.page_selector.setEnabled(page_count > 0)
+            self.page_selector.blockSignals(False)
 
     def _change_page(self, change: int) -> None:
-        if not self.project:
-            return
-        document = self.project.document()
+        self._go_to_page(self.current_page + change)
+
+    @Slot()
+    def go_to_page(self) -> None:
+        document = self.project.document() if self.project else None
         if not document:
+            self._error("No project is open", "Open a manuscript first.")
             return
-        target = self.current_page + change
-        if not 1 <= target <= document["page_count"]:
+        target, accepted = QInputDialog.getInt(
+            self,
+            "Go to page",
+            f"Page number (1-{document['page_count']}):",
+            self.current_page,
+            1,
+            int(document["page_count"]),
+        )
+        if accepted:
+            self._go_to_page(target)
+
+    @Slot(int)
+    def _go_to_page(self, target: int) -> None:
+        document = self.project.document() if self.project else None
+        if not document or not 1 <= target <= int(document["page_count"]):
+            self._update_navigation_actions()
+            return
+        if target == self.current_page:
+            self._update_navigation_actions()
             return
         self.save_current_edit()
         self.current_page = target
         self._render_page()
         self._refresh_lines()
         self.status_label.setText(f"Page {self.current_page} of {document['page_count']}.")
+
+    @Slot(bool)
+    def _set_autosave(self, enabled: bool) -> None:
+        self.autosave_enabled = bool(enabled)
+        QSettings().setValue("editor/autosave", self.autosave_enabled)
+        if self.autosave_enabled:
+            self._schedule_autosave()
+            self.statusBar().showMessage("Auto Save is on.", 4_000)
+        else:
+            self._edit_timer.stop()
+            self.statusBar().showMessage(
+                "Auto Save is off. Use Ctrl+S; edits are still protected when changing context or closing.",
+                7_000,
+            )
 
     def _show_welcome_status(self) -> None:
         status = self.model_manager.status()
@@ -617,17 +843,23 @@ class MainWindow(QMainWindow):
         if not document:
             return
         rendered = self.renderer.render(document["source_path"], self.current_page - 1, dpi=150)
-        page = self.project.page(self.current_page)
-        if page:
-            self._display_scale_x = rendered.image.width / page["width"]
-            self._display_scale_y = rendered.image.height / page["height"]
-        else:
-            self._display_scale_x = self._display_scale_y = 1.0
         qt_image = ImageQt(rendered.image)
         self.pixmap_item.setPixmap(QPixmap.fromImage(qt_image))
+        self._sync_display_scale_from_project_page()
         self.scene.setSceneRect(QRectF(self.pixmap_item.boundingRect()))
         self.viewer.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
         self._update_navigation_actions()
+
+    def _sync_display_scale_from_project_page(self) -> None:
+        """Map stored detection coordinates to the currently displayed page image."""
+
+        page = self.project.page(self.current_page) if self.project else None
+        pixmap = self.pixmap_item.pixmap()
+        if page and not pixmap.isNull() and page["width"] > 0 and page["height"] > 0:
+            self._display_scale_x = pixmap.width() / page["width"]
+            self._display_scale_y = pixmap.height() / page["height"]
+        else:
+            self._display_scale_x = self._display_scale_y = 1.0
 
     def _refresh_lines(self, preserve_selection: bool = True) -> None:
         selected_id = self.current_line_id if preserve_selection else None
@@ -637,6 +869,7 @@ class MainWindow(QMainWindow):
         self._edit_timer.stop()
         self.current_line_id = None
         self.current_line_text = None
+        self._hovered_line_id = None
         self.line_list.clear()
         for overlay in self._overlays:
             self.scene.removeItem(overlay)
@@ -674,6 +907,7 @@ class MainWindow(QMainWindow):
             self.editor.blockSignals(True)
             self.editor.clear()
             self.editor.blockSignals(False)
+            self._update_overlay_highlights()
 
     def _project_model_spec(self) -> ModelSpec:
         if not self.project:
@@ -923,6 +1157,10 @@ class MainWindow(QMainWindow):
     @Slot(int, int)
     def _processing_line_saved(self, page_number: int, _line_id: int) -> None:
         if page_number == self.current_page and self.project:
+            # The worker detects at 300 DPI while the viewer uses 150 DPI. Page
+            # geometry is available before the first line signal, so synchronize
+            # the transform immediately instead of waiting for the final refresh.
+            self._sync_display_scale_from_project_page()
             self._refresh_lines(preserve_selection=True)
         self.statusBar().showMessage(f"Saved a line on page {page_number}; transcription continues.")
 
@@ -1131,16 +1369,15 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def show_local_help(self) -> None:
-        if self._help_dialog:
-            self._help_dialog.refresh()
-            self._help_dialog.show()
-            self._help_dialog.raise_()
+        if not self._helper_dock or not self._help_dialog:
             return
-        dialog = LocalHelpDialog(self)
-        dialog.install_requested.connect(self._install_selected_model)
-        dialog.finished.connect(lambda _result: setattr(self, "_help_dialog", None))
-        self._help_dialog = dialog
-        dialog.show()
+        if self._helper_dock.isVisible():
+            self._helper_dock.hide()
+        else:
+            self._help_dialog.refresh()
+            self._helper_dock.show()
+            self._helper_dock.raise_()
+            self.resizeDocks([self._helper_dock], [390], Qt.Horizontal)
 
     def _start_model_installation(self) -> None:
         if self._install_thread and self._install_thread.isRunning():
@@ -1277,12 +1514,28 @@ class MainWindow(QMainWindow):
         self.editor.blockSignals(True)
         self.editor.setPlainText(line.display_text)
         self.editor.blockSignals(False)
+        self._update_overlay_highlights()
+
+    @Slot(object)
+    def _hover_line(self, line_id: int | None) -> None:
+        self._hovered_line_id = line_id
+        self._update_overlay_highlights()
+
+    def _update_overlay_highlights(self) -> None:
         for overlay in self._overlays:
-            selected = overlay.data(0) == line.id
-            overlay.setBrush(QBrush(QColor(45, 108, 223, 60) if selected else QColor(0, 0, 0, 0)))
+            line_id = overlay.data(0)
+            if line_id == self.current_line_id:
+                overlay.setBrush(QBrush(QColor(45, 108, 223, 64)))
+                overlay.setPen(QPen(QColor("#2D6CDF"), 3))
+            elif line_id == self._hovered_line_id:
+                overlay.setBrush(QBrush(QColor(184, 148, 145, 82)))
+                overlay.setPen(QPen(QColor("#9A6F6B"), 3))
+            else:
+                overlay.setBrush(QBrush(QColor(0, 0, 0, 0)))
+                overlay.setPen(QPen(QColor("#9A6F6B"), 2))
 
     def _schedule_autosave(self) -> None:
-        if self.current_line_id is not None and self.project:
+        if self.autosave_enabled and self.current_line_id is not None and self.project:
             self._edit_timer.start()
 
     @Slot()

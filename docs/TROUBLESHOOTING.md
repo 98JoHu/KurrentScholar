@@ -22,6 +22,7 @@
 - **PDF will not open:** encrypted, damaged, unusually large, or parser-hostile files are rejected. Work from
   an authorized archival image copy; never overwrite the original.
 - **Export fails:** choose a writable destination and close an already open DOCX/CSV. Projects remain saved.
-- **Windows warns about the installer:** verify the release URL and published SHA-256. A pre-release unsigned
-  build may trigger reputation warnings; do not disable SmartScreen or antivirus system-wide.
+- **Windows warns about the installer:** verify the GitHub Release URL and published SHA-256. The current
+  installer is unsigned and may trigger reputation warnings; do not disable SmartScreen or antivirus
+  system-wide.
 

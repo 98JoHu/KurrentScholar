@@ -105,6 +105,7 @@ def main() -> int:
     if arguments.smoke_test:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import QTimer
+    from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
     from kurrentscholar.ui.main_window import MainWindow
@@ -112,7 +113,13 @@ def main() -> int:
     application = QApplication([sys.argv[0], *qt_arguments])
     install_qt_message_handler()
     application.setApplicationName("KurrentScholar")
+    application.setApplicationVersion(__version__)
+    # Keep this stable: changing it moves QSettings and would hide existing
+    # tutorial/autosave preferences after an upgrade.
     application.setOrganizationName("KurrentScholar")
+    icon_path = Path(__file__).resolve().parent / "assets" / "kurrentscholar-logo.png"
+    if icon_path.is_file():
+        application.setWindowIcon(QIcon(str(icon_path)))
     window = MainWindow(offer_model_on_startup=not arguments.smoke_test)
     if arguments.smoke_test:
         window.close()

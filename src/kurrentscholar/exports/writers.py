@@ -29,6 +29,13 @@ def _safe_csv(value: object) -> object:
     return value
 
 
+def _safe_xlsx(value: object) -> object:
+    """Keep Excel-safe text while representing empty spreadsheet cells as blanks."""
+
+    safe = _safe_csv(value)
+    return None if safe == "" else safe
+
+
 def _model_provenance(project: ProjectDatabase) -> dict[str, str | None]:
     info = project.info()
     model_id = info.get("model_id", DEFAULT_MODEL.model_id)
@@ -159,12 +166,12 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
     lines = project.lines()
     for line in lines:
         transcript.append([
-            _safe_csv(document.get("filename", "")),
+            _safe_xlsx(document.get("filename", "")),
             line.page_number,
             line.reading_order + 1,
-            _safe_csv(line.machine_text),
-            _safe_csv(line.corrected_text if line.corrected_text is not None else ""),
-            _safe_csv(line.display_text),
+            _safe_xlsx(line.machine_text),
+            _safe_xlsx(line.corrected_text if line.corrected_text is not None else ""),
+            _safe_xlsx(line.display_text),
             line.confidence,
             thresholds.classify(line.confidence).value,
             line.review_status,
@@ -172,7 +179,7 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
             line.bbox.y,
             line.bbox.width,
             line.bbox.height,
-            _safe_csv(line.notes),
+            _safe_xlsx(line.notes),
         ])
     header_fill = PatternFill("solid", fgColor="9A6F6B")
     for cell in transcript[1]:
@@ -180,14 +187,14 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
         cell.font = Font(color="FFFFFF", bold=True)
         cell.alignment = Alignment(vertical="center")
     transcript.freeze_panes = "A2"
-    transcript.auto_filter.ref = f"A1:N{max(1, transcript.max_row)}"
     transcript.sheet_view.showGridLines = False
     widths = [24, 8, 8, 42, 42, 42, 12, 20, 16, 9, 9, 9, 9, 28]
     for index, width in enumerate(widths, start=1):
         transcript.column_dimensions[chr(64 + index)].width = width
     for row in transcript.iter_rows(min_row=2):
         for cell in row:
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            if cell.value is not None:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
     for cell in transcript["G"][1:]:
         cell.number_format = "0.0%"
     if lines:
@@ -225,7 +232,7 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
         ("Unavailable confidence", counts.get("unavailable", 0)),
     ]
     for row in summary_rows:
-        summary.append([_safe_csv(value) for value in row])
+        summary.append([_safe_xlsx(value) for value in row])
     summary.column_dimensions["A"].width = 28
     summary.column_dimensions["B"].width = 48
 
@@ -242,7 +249,7 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
         **model,
     }
     for key, value in provenance_rows.items():
-        provenance.append([key.replace("_", " ").title(), _safe_csv(value or "")])
+        provenance.append([key.replace("_", " ").title(), _safe_xlsx(value or "")])
     provenance.column_dimensions["A"].width = 28
     provenance.column_dimensions["B"].width = 72
 
@@ -254,6 +261,7 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
             cell.font = Font(color="FFFFFF", bold=True)
         for row in sheet.iter_rows(min_row=2):
             for cell in row:
-                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                if cell.value is not None:
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
     workbook.save(destination)
 

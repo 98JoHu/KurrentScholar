@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QRectF, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
-    QStackedWidget,
+    QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
-    QTextBrowser,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -23,85 +24,167 @@ from kurrentscholar.constants import DOWNLOAD_CATALOG, HELPER_MODEL, ModelSpec
 from kurrentscholar.recognition import LocalHelpBackend, ModelManager
 
 
-class TutorialDialog(QDialog):
-    def __init__(self, parent=None) -> None:
+class TutorialOverlay(QWidget):
+    """A lightweight coach-mark tour anchored to the real application controls."""
+
+    finished = Signal()
+
+    def __init__(self, steps: list[tuple[str, str, QWidget | None]], parent: QWidget) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Welcome to KurrentScholar")
-        self.resize(650, 430)
-        self.pages = QStackedWidget()
-        content = [
-            (
-                "Private, offline transcription",
-                "KurrentScholar keeps manuscript images, projects, corrections, and exports on this "
-                "computer. An internet connection is used only when you explicitly install a model.",
-            ),
-            (
-                "1 · Open a manuscript",
-                "Use File > Open Document for PDF or image files. Choose where to save the .ksproj "
-                "research project. You can reopen that project later without importing the document again.",
-            ),
-            (
-                "2 · Choose pages and transcribe",
-                "Use Transcription for the current page, a range such as 1-5,8, or the full document. "
-                "Completed lines appear immediately, so you may navigate and review while processing continues.",
-            ),
-            (
-                "3 · Review responsibly",
-                "Confidence labels prioritize review; they are not accuracy guarantees. Correct a line in the "
-                "editor and mark it verified only after comparing it with the image. Verified lines become ground truth.",
-            ),
-            (
-                "4 · Models and ground truth",
-                "Models > Model Manager shows installed models and disk use. The ground-truth bundle under Review "
-                "exports verified line images for reproducible external GPU fine-tuning; it does not silently retrain the app.",
-            ),
-            (
-                "5 · Export and get help",
-                "Export TXT, Word, CSV, Excel, or JSON from File > Export. If something goes wrong, use the optional "
-                "local Help Assistant or Help > Diagnostic Log. You can replay this tutorial at any time.",
-            ),
-        ]
-        for title, body in content:
-            page = QWidget()
-            layout = QVBoxLayout(page)
-            heading = QLabel(title)
-            heading.setObjectName("tutorialHeading")
-            heading.setWordWrap(True)
-            text = QLabel(body)
-            text.setWordWrap(True)
-            text.setAlignment(Qt.AlignTop)
-            layout.addStretch(1)
-            layout.addWidget(heading)
-            layout.addWidget(text)
-            layout.addStretch(2)
-            self.pages.addWidget(page)
+        self.steps = steps
+        self.index = 0
+        self.setObjectName("tutorialOverlay")
+        self.setFocusPolicy(Qt.StrongFocus)
+
+        self.card = QFrame(self)
+        self.card.setObjectName("tutorialCard")
+        self.card.setMinimumWidth(390)
+        self.card.setMaximumWidth(470)
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(24, 22, 24, 20)
+        self.kicker = QLabel("WELCOME")
+        self.kicker.setObjectName("tutorialKicker")
+        self.heading = QLabel()
+        self.heading.setObjectName("tutorialHeading")
+        self.heading.setWordWrap(True)
+        self.body = QLabel()
+        self.body.setObjectName("tutorialBody")
+        self.body.setWordWrap(True)
+        self.body.setTextFormat(Qt.PlainText)
+        self.progress = QLabel()
+        self.progress.setObjectName("tutorialProgress")
         self.back = QPushButton("Back")
         self.next = QPushButton("Next")
-        self.skip = QPushButton("Close")
+        self.skip = QPushButton("Skip tour")
         self.back.clicked.connect(lambda: self._move(-1))
         self.next.clicked.connect(lambda: self._move(1))
-        self.skip.clicked.connect(self.accept)
+        self.skip.clicked.connect(self.close_tour)
         buttons = QHBoxLayout()
-        buttons.addWidget(self.back)
+        buttons.addWidget(self.progress)
         buttons.addStretch(1)
-        buttons.addWidget(self.skip)
+        buttons.addWidget(self.back)
         buttons.addWidget(self.next)
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.pages)
-        layout.addLayout(buttons)
+        card_layout.addWidget(self.kicker)
+        card_layout.addWidget(self.heading)
+        card_layout.addWidget(self.body)
+        card_layout.addSpacing(8)
+        card_layout.addLayout(buttons)
+        card_layout.addWidget(self.skip, alignment=Qt.AlignRight)
         self._sync()
 
+    def showEvent(self, event) -> None:
+        parent = self.parentWidget()
+        if parent:
+            parent.installEventFilter(self)
+            self.setGeometry(parent.rect())
+        self.raise_()
+        self.setFocus()
+        self._position_card()
+        super().showEvent(event)
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.parentWidget() and event.type() in (QEvent.Resize, QEvent.Move):
+            self.setGeometry(self.parentWidget().rect())
+            self._position_card()
+        return super().eventFilter(watched, event)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        shade = QPainterPath()
+        shade.addRect(QRectF(self.rect()))
+        target = self._target_rect()
+        if target:
+            cutout = QPainterPath()
+            cutout.addRoundedRect(QRectF(target), 12, 12)
+            shade = shade.subtracted(cutout)
+        painter.fillPath(shade, QColor(26, 32, 39, 174))
+        if target:
+            painter.setPen(QPen(QColor("#B89491"), 3))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(target, 12, 12)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape:
+            self.close_tour()
+        elif event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Right):
+            self._move(1)
+        elif event.key() == Qt.Key_Left:
+            self._move(-1)
+        else:
+            super().keyPressEvent(event)
+
+    def _target_rect(self) -> QRect | None:
+        target = self.steps[self.index][2]
+        if target is None or not target.isVisible():
+            return None
+        top_left = self.mapFromGlobal(target.mapToGlobal(QPoint(0, 0)))
+        return QRect(top_left, target.size()).adjusted(-8, -8, 8, 8)
+
+    def _position_card(self) -> None:
+        self.card.adjustSize()
+        size = self.card.sizeHint()
+        width = min(max(size.width(), 390), min(470, max(390, self.width() - 40)))
+        self.card.setFixedWidth(width)
+        self.card.adjustSize()
+        card_size = self.card.sizeHint()
+        margin = 24
+        target = self._target_rect()
+        if target is None:
+            x = max(margin, (self.width() - card_size.width()) // 2)
+            y = max(margin, (self.height() - card_size.height()) // 2)
+        else:
+            spaces = {
+                "left": target.left() - margin,
+                "right": self.width() - target.right() - margin,
+                "top": target.top() - margin,
+                "bottom": self.height() - target.bottom() - margin,
+            }
+            side = max(spaces, key=spaces.get)
+            if side == "left":
+                x = target.left() - card_size.width() - margin
+                y = target.center().y() - card_size.height() // 2
+            elif side == "right":
+                x = target.right() + margin
+                y = target.center().y() - card_size.height() // 2
+            elif side == "top":
+                x = target.center().x() - card_size.width() // 2
+                y = target.top() - card_size.height() - margin
+            else:
+                x = target.center().x() - card_size.width() // 2
+                y = target.bottom() + margin
+            x = min(max(margin, x), max(margin, self.width() - card_size.width() - margin))
+            y = min(max(margin, y), max(margin, self.height() - card_size.height() - margin))
+        self.card.move(x, y)
+        self.card.raise_()
+
     def _move(self, delta: int) -> None:
-        target = self.pages.currentIndex() + delta
-        if target >= self.pages.count():
-            self.accept()
+        target = self.index + delta
+        if target >= len(self.steps):
+            self.close_tour()
             return
-        self.pages.setCurrentIndex(max(0, target))
+        self.index = max(0, target)
         self._sync()
 
     def _sync(self) -> None:
-        self.back.setEnabled(self.pages.currentIndex() > 0)
-        self.next.setText("Start" if self.pages.currentIndex() == self.pages.count() - 1 else "Next")
+        title, body, target = self.steps[self.index]
+        self.kicker.setText("WELCOME" if self.index == 0 else "QUICK TOUR")
+        self.heading.setText(title)
+        self.body.setText(body)
+        self.progress.setText(f"{self.index + 1} of {len(self.steps)}")
+        self.back.setEnabled(self.index > 0)
+        self.next.setText("Start using KurrentScholar" if self.index == len(self.steps) - 1 else "Next")
+        self.skip.setVisible(self.index < len(self.steps) - 1)
+        self._position_card()
+        self.update()
+
+    def close_tour(self) -> None:
+        parent = self.parentWidget()
+        if parent:
+            parent.removeEventFilter(self)
+        self.hide()
+        self.finished.emit()
+        self.deleteLater()
 
 
 class GroundTruthDialog(QDialog):
@@ -252,59 +335,109 @@ class HelpWorker(QObject):
             self.failed.emit(str(error))
 
 
-class LocalHelpDialog(QDialog):
+class LocalHelpPanel(QWidget):
     install_requested = Signal(object)
+    close_requested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Local Help Assistant")
-        self.resize(650, 520)
+        self.setObjectName("helperPanel")
+        self.setMinimumWidth(350)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self._message_labels: list[QLabel] = []
+        self._thinking: QLabel | None = None
+
+        avatar = QLabel("?")
+        avatar.setObjectName("helperAvatar")
+        avatar.setAlignment(Qt.AlignCenter)
+        title = QLabel("KurrentBot")
+        title.setObjectName("helperTitle")
+        subtitle = QLabel("Local guide to KurrentScholar")
+        subtitle.setObjectName("helperSubtitle")
+        identity = QVBoxLayout()
+        identity.setSpacing(0)
+        identity.addWidget(title)
+        identity.addWidget(subtitle)
+        reset = QPushButton("↻")
+        reset.setObjectName("helperHeaderButton")
+        reset.setToolTip("Start a new conversation")
+        close = QPushButton("×")
+        close.setObjectName("helperHeaderButton")
+        close.setToolTip("Close KurrentBot")
+        reset.clicked.connect(self.reset_conversation)
+        close.clicked.connect(self.close_requested)
+        header = QHBoxLayout()
+        header.addWidget(avatar)
+        header.addLayout(identity)
+        header.addStretch(1)
+        header.addWidget(reset)
+        header.addWidget(close)
+
         notice = QLabel(
-            "Optional and fully local after installation. It is intended only for navigation and troubleshooting, "
-            "is English-oriented, and may be wrong. Do not paste manuscript text; the assistant does not need it."
+            "Optional and fully local after installation. Ask about navigation and troubleshooting; "
+            "do not paste manuscript text."
         )
+        notice.setObjectName("helperNotice")
         notice.setWordWrap(True)
-        self.question = QTextEdit()
-        self.question.setPlaceholderText("For example: How do I transcribe only pages 5 to 12?")
-        self.question.setMaximumHeight(100)
-        self.response = QTextBrowser()
-        self.response.setPlaceholderText("The answer will appear here.")
-        self.ask = QPushButton("Ask locally")
+
+        self.message_area = QScrollArea()
+        self.message_area.setObjectName("helperMessages")
+        self.message_area.setWidgetResizable(True)
+        self.message_area.setFrameShape(QFrame.NoFrame)
+        message_host = QWidget()
+        message_host.setObjectName("helperMessageHost")
+        self.messages = QVBoxLayout(message_host)
+        self.messages.setContentsMargins(10, 12, 10, 12)
+        self.messages.setSpacing(10)
+        self.messages.setAlignment(Qt.AlignTop)
+        self.message_area.setWidget(message_host)
+
+        self.question = QLineEdit()
+        self.question.setObjectName("helperInput")
+        self.question.setPlaceholderText("Ask how to use KurrentScholar…")
+        self.question.setMaxLength(400)
+        self.question.returnPressed.connect(self._ask)
+        self.ask = QPushButton("Send")
+        self.ask.setObjectName("helperSend")
         self.install = QPushButton("Install helper model")
-        close = QPushButton("Close")
+        self.install.setObjectName("helperInstall")
         self.ask.clicked.connect(self._ask)
         self.install.clicked.connect(lambda: self.install_requested.emit(HELPER_MODEL))
-        close.clicked.connect(self.reject)
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.ask)
-        buttons.addWidget(self.install)
-        buttons.addStretch(1)
-        buttons.addWidget(close)
+        input_row = QHBoxLayout()
+        input_row.addWidget(self.question, 1)
+        input_row.addWidget(self.ask)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.addLayout(header)
         layout.addWidget(notice)
-        layout.addWidget(self.question)
-        layout.addWidget(self.response, 1)
-        layout.addLayout(buttons)
+        layout.addWidget(self.message_area, 1)
+        layout.addWidget(self.install)
+        layout.addLayout(input_row)
         self._thread: QThread | None = None
         self._worker: HelpWorker | None = None
         self._backend: LocalHelpBackend | None = None
+        self.reset_conversation()
         self.refresh()
 
     def refresh(self) -> None:
         installed = ModelManager(spec=HELPER_MODEL).status().installed
         self.ask.setEnabled(installed and self._thread is None)
+        self.question.setEnabled(installed and self._thread is None)
         self.install.setVisible(not installed)
 
     def _ask(self) -> None:
         manager = ModelManager(spec=HELPER_MODEL)
         if not manager.status().installed or self._thread is not None:
             return
-        question = self.question.toPlainText().strip()
+        question = self.question.text().strip()
         if not question:
-            self.response.setText("Enter a question first.")
+            self.question.setFocus()
             return
-        self.response.setText("Thinking locally…")
+        self._add_message(question, user=True)
+        self.question.clear()
+        self._thinking = self._add_message("Thinking locally…", user=False)
         self.ask.setEnabled(False)
+        self.question.setEnabled(False)
         self._thread = QThread(self)
         if self._backend is None:
             self._backend = LocalHelpBackend(manager.root)
@@ -322,7 +455,12 @@ class LocalHelpDialog(QDialog):
 
     @Slot(str)
     def _finished(self, message: str) -> None:
-        self.response.setPlainText(message)
+        if self._thinking:
+            self._thinking.setText(message)
+            self._thinking = None
+        else:
+            self._add_message(message, user=False)
+        QTimer.singleShot(0, self._scroll_to_bottom)
 
     @Slot()
     def _thread_finished(self) -> None:
@@ -332,9 +470,44 @@ class LocalHelpDialog(QDialog):
         self._thread = None
         self.refresh()
 
-    def reject(self) -> None:
-        if self._thread is None:
-            super().reject()
+    def reset_conversation(self) -> None:
+        if self._thread is not None:
+            return
+        while self.messages.count():
+            item = self.messages.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._message_labels.clear()
+        self._add_message(
+            "Hi, I’m KurrentBot — your local guide to KurrentScholar. Ask me how to open a "
+            "project, transcribe selected pages, review uncertain lines, manage models, or export results.",
+            user=False,
+        )
+
+    def _add_message(self, text: str, *, user: bool) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("helperUserMessage" if user else "helperBotMessage")
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+        label.setMaximumWidth(300)
+        row = QHBoxLayout()
+        if user:
+            row.addStretch(1)
+            row.addWidget(label)
+        else:
+            row.addWidget(label)
+            row.addStretch(1)
+        holder = QWidget()
+        holder.setObjectName("helperMessageRow")
+        holder.setLayout(row)
+        self.messages.addWidget(holder)
+        self._message_labels.append(label)
+        QTimer.singleShot(0, self._scroll_to_bottom)
+        return label
+
+    def _scroll_to_bottom(self) -> None:
+        bar = self.message_area.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     @property
     def busy(self) -> bool:

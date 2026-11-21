@@ -1,102 +1,152 @@
-# KurrentScholar
+<p align="center">
+  <img src="assets/branding/kurrentscholar-logo-readme.png" alt="KurrentScholar logo" width="180">
+</p>
 
-KurrentScholar is an offline-first desktop application for transcribing scanned historical German
-Kurrent handwriting. It keeps manuscripts and research notes on your computer, shows detected source
-lines beside editable transcriptions, and marks model uncertainty without presenting it as verified
-accuracy.
+<h1 align="center">KurrentScholar</h1>
 
-> **No Python installation, programming knowledge, API key, account, or paid AI subscription is
-> required for released installers.**
+<p align="center">
+  Private, local transcription and review of historical German Kurrent manuscripts.
+</p>
 
-## Download
+<p align="center">
+  <a href="https://github.com/98JoHu/KurrentScholar/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/98JoHu/KurrentScholar"></a>
+  <a href="https://github.com/98JoHu/KurrentScholar/actions/workflows/ci.yml"><img alt="Tests" src="https://github.com/98JoHu/KurrentScholar/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-bc8e8e"></a>
+  <a href="CITATION.cff"><img alt="Cite this software" src="https://img.shields.io/badge/cite-CITATION.cff-0b0a06"></a>
+</p>
 
-The project is **pre-release**. No tested public installer or genuine application screenshot exists yet;
-do not treat the CI configuration as a release artifact. When the first Windows build passes clean-machine
-acceptance testing, it will be linked from the repository's GitHub Releases page.
+KurrentScholar is an open-source Windows desktop application for turning scanned historical German
+Kurrent handwriting into editable, auditable text. It detects individual writing lines, runs open TrOCR
+models locally, presents source and transcription together for correction, and preserves model,
+segmentation, and verification provenance in a reusable project.
 
-Planned first platform: Windows 10/11 x64, CPU-only, approximately 4 GB application storage plus a
-separate one-time 1.34 GB model download. At least 8 GB RAM is the provisional development target, not
-yet a measured published requirement.
+No Python installation, API key, account, or paid AI subscription is required. Manuscript images and
+transcriptions stay on your computer. Internet access is needed only when you explicitly install a model.
 
-## Intended workflow
+## Download for Windows
 
-1. Download and open the Windows installer from GitHub Releases.
-2. Follow the ordinary per-user installation steps and launch KurrentScholar.
-3. Confirm the one-time handwriting-model download (about 1.25 GiB at the pinned revision).
-4. Open a historical PDF, PNG, JPEG, or TIFF and create a local research project.
-5. Choose the current page, a range such as `3-8,12`, or the full document from **Transcription**.
-   Only detected line crops reach TrOCR.
-6. Follow completed lines live while later lines run; navigate pages, correct text, and mark a line
-   verified only after comparing it with the image.
-7. Save and reopen the SQLite project; export to text, Word, CSV, Excel, or provenance-rich JSON.
+**[Download KurrentScholar for Windows 10/11 x64](https://github.com/98JoHu/KurrentScholar/releases/latest/download/KurrentScholar-Setup-Windows-x64.exe)**
 
-No manuscript is uploaded. Network access occurs only when the user starts model installation. The
-default checkpoint is [dh-unibe/trocr-kurrent](https://huggingface.co/dh-unibe/trocr-kurrent), pinned
-to commit `2882072ac68f7aa09353a71092ebd5510f4b82cd`; ordinary recognition then forces local-only
-loading. Bern's MIT-licensed 16th–18th-century checkpoint and its newer broad 16th–19th-century
-checkpoint are optional same-pipeline choices; neither is presented as a universal accuracy upgrade.
+The same [GitHub Release](https://github.com/98JoHu/KurrentScholar/releases/latest) contains
+`SHA256SUMS.txt`. The current installer is not code-signed, so Windows may show an unknown-publisher
+warning. Verify that the download URL starts with `https://github.com/98JoHu/KurrentScholar/` and compare
+the checksum; do not disable Windows security.
 
-## Current functionality
+Recommended minimums are Windows 10 or 11 x64, 8 GB RAM, and roughly 3 GB free disk space for the
+application, one recognition model, and installation headroom. Recognition is CPU-only and adapts its
+thread count to the processors available to the application. A GPU is not required.
 
-- Incremental PDF/image rendering and ink-profile/valley line segmentation with source coordinates.
-- Real local TrOCR inference using safetensors, CPU fallback, beam transition scores, and truncation flags.
-- Native two-panel Qt review UI, selectable page scopes, live background results, cancellation, autosave,
-  line overlays, manual correction and verification.
-- Schema-versioned SQLite projects preserving immutable machine output separately from edited text.
-- A model manager showing installed, partial, or damaged downloads and disk use, with safe repair/removal;
-  changing a project's pinned model requires an automatic backup and clean retranscription.
-- UTF-8 text, Word, formula-safe CSV, structured Excel, and provenance-rich JSON exports.
-- Verified-page ground-truth bundles containing line crops, labels, page scopes, checksums, and base-model
-  provenance for external CUDA fine-tuning. KurrentScholar deliberately does not pretend that a one-page
-  CPU training run is reliable; adapted checkpoints require held-out evaluation before use.
-- First-start tutorial with replay, source-document relinking by SHA-256, and an optional Apache-2.0 local
-  SmolLM2 help model. The model is constrained to selecting curated navigation topics so it cannot invent
-  application controls; manuscript content is neither needed nor sent to it.
-- CER/WER evaluation of human-verified project lines, plus confidence-band diagnostics; Windows
-  build/installer workflow.
+## First use
 
-The included OpenCV segmenter is a packageable fallback for predominantly horizontal pages. It detects
-line centres independently so descenders and flourishes do not create multi-line blocks, and can keep
-spatially separated regions on the same row separate. It is not equivalent to a validated learned
-historical-layout model and may still miss marginalia, complex columns, curves, tables, crossed text, or
-decorative marks. Missed handwriting and confident recognition errors remain possible. Existing projects
-made by an older detector can be migrated with **Re-segment**; KurrentScholar creates a separate backup
-before replacing their derived boxes and transcriptions. See [the current plan](PLAN.md) before using this
-pre-release software for research.
+1. Install and open KurrentScholar. The welcome tour introduces the actual controls.
+2. Accept the one-time model installation prompt. Transcription cannot run without a recognition model.
+3. Open a PDF, PNG, JPEG, or TIFF and choose where to save the local `.ksproj` research project.
+4. Transcribe the current page, a page range such as `3-8,12`, or the full document.
+5. Review results while transcription continues. Hovering or selecting a line highlights its source box;
+   correct the text and mark it verified only after comparison with the manuscript.
+6. Auto Save is on by default. Export the project as text, Word, CSV, Excel, or provenance-rich JSON.
 
-## Running from source (developers)
+The default model download is about 1.34 GB. Interrupted downloads can be continued from **Models >
+Model Manager**. After installation, ordinary transcription loads the pinned files locally and works
+offline.
 
-Install `uv`, then on Windows:
+## What is included
+
+- Adaptive line-oriented segmentation for predominantly horizontal Kurrent pages, with spatially
+  separated regions kept distinct.
+- Local TrOCR inference with pinned model revisions, safetensors integrity checks, beam-search confidence
+  evidence, and CPU-safe defaults.
+- Live page-scoped transcription, cancellation, direct page navigation, synchronized overlays, editable
+  text, correction history, and human verification.
+- Default-on Auto Save and schema-versioned SQLite projects that preserve machine output separately from
+  edited text.
+- A model manager showing installed, partial, or damaged models and disk use, with repair and safe removal.
+- UTF-8 text, Word, formula-safe CSV, standards-compliant Excel, and provenance-rich JSON exports.
+- Verified ground-truth bundles and CER/WER evaluation for responsible external adaptation workflows.
+- An optional Apache-2.0 local helper that answers navigation questions with curated in-app guidance and
+  does not need manuscript content.
+- Persistent application, crash, and responsiveness logs under
+  `%LOCALAPPDATA%\KurrentScholar\Logs` for troubleshooting.
+
+## Accuracy and research use
+
+KurrentScholar assists transcription; it does not certify it. Difficult handwriting, faded scans,
+marginalia, tables, crossed-out text, unusual columns, and historical spellings can defeat either line
+detection or recognition. Confidence is a review signal, not a probability that a line is correct.
+Important readings should be checked against the source and marked verified by a person.
+
+The default checkpoint is
+[`dh-unibe/trocr-kurrent`](https://huggingface.co/dh-unibe/trocr-kurrent), pinned to an exact revision.
+Additional Bern Kurrent checkpoints can be installed through the same model manager for period-appropriate
+comparison. A project records the model actually used and prevents silent mixing of checkpoints. Model
+changes require a project backup and clean retranscription.
+
+The included OpenCV segmenter is a practical packageable fallback, not a universal historical-layout
+model. Existing projects created by an older detector can use **Transcription > Re-segment document**;
+KurrentScholar creates a backup before replacing derived boxes and transcription results.
+
+See the [user guide](docs/USER_GUIDE.md), [research methodology](docs/RESEARCH_METHODOLOGY.md),
+[privacy notes](docs/PRIVACY.md), and [troubleshooting guide](docs/TROUBLESHOOTING.md).
+
+## Running from source
+
+Development uses Python 3.11 and [`uv`](https://docs.astral.sh/uv/):
 
 ```powershell
-uv sync --extra dev
+git clone https://github.com/98JoHu/KurrentScholar.git
+cd KurrentScholar
+uv python install 3.11
+uv sync --extra dev --frozen
 uv run kurrentscholar
+```
+
+Run the release checks with:
+
+```powershell
+uv lock --check
+uv run ruff check .
 uv run pytest -m "not real_model"
 ```
 
-The first model installation needs internet access. Real-model tests are opt-in and are never evidence
-until their actual result is recorded. Build instructions are in [INSTALLATION.md](docs/INSTALLATION.md).
+Windows packaging and clean-machine acceptance steps are documented in
+[Installation and build](docs/INSTALLATION.md) and [Publishing](docs/PUBLISHING.md).
 
-## Citation and acknowledgement
+## Citation
 
-### Citing KurrentScholar
+If KurrentScholar contributes to research, cite the exact software release and separately cite the
+recognition model recorded in the project or export. GitHub's **Cite this repository** control reads
+[`CITATION.cff`](CITATION.cff); a ready-to-use BibTeX record is also available in
+[`CITATION.bib`](CITATION.bib).
 
-If you use KurrentScholar in research, cite the exact software release. Publication metadata in
-`CITATION.cff` is intentionally placeholder-only until supplied by the maintainer.
+```bibtex
+@software{hummel_2026_kurrentscholar,
+  author       = {Hummel, Jonas},
+  title        = {KurrentScholar: Offline Historical Kurrent Handwriting Transcription},
+  year         = {2026},
+  version      = {0.1.3},
+  institution  = {Karlsruhe Institute of Technology (KIT)},
+  url          = {https://github.com/98JoHu/KurrentScholar},
+  license      = {MIT}
+}
+```
 
-### Citing the underlying recognition model
+The original default recognition model has its own DOI:
+[`10.57967/hf/0442`](https://doi.org/10.57967/hf/0442). KurrentScholar did not develop or train the
+upstream recognition models.
 
-KurrentScholar uses independently developed TrOCR Kurrent models from Digital Humanities at the
-University of Bern and its collaborators. KurrentScholar did not develop or train them. Cite the exact
-model recorded in the project/export. The original model has a separate
-[model DOI](https://doi.org/10.57967/hf/0442).
+## Support and contributing
 
-The upstream model card reports line-level results on its own nineteenth-century data and warns that the
-model has not been extensively tested. Those figures must not be generalized to other scripts, periods,
-page segmentation, or archival conditions.
+For bugs and feature requests, use [GitHub Issues](https://github.com/98JoHu/KurrentScholar/issues) or
+contact [Jonas Hummel](mailto:jonas.hummel@kit.edu) at Karlsruhe Institute of Technology (KIT).
+Research profiles: [ORCID](https://orcid.org/0009-0005-8563-6175),
+[Google Scholar](https://scholar.google.com/citations?user=l7I14bQAAAAJ&hl=de), and
+[LinkedIn](https://www.linkedin.com/in/jonas-hummel/).
+
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Please report security issues privately
+according to [SECURITY.md](SECURITY.md), and never attach confidential manuscripts to a public issue.
 
 ## License
 
-Original KurrentScholar code is MIT-licensed. Third-party components retain their own licenses; see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). A final bundled-binary license audit is a release gate.
-
+KurrentScholar's original source code is released under the [MIT License](LICENSE). Third-party libraries,
+recognition models, and optional helper models retain their own licenses and attribution requirements; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

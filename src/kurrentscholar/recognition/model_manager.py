@@ -105,8 +105,10 @@ class ModelManager:
                 progress(message)
 
         if not self.check_disk_space():
+            required_gib = (self.spec.required_bytes + 512 * 1024 * 1024) / (1024 ** 3)
             raise ModelInstallError(
-                "At least 1.8 GB of free disk space is required for the model and download cache."
+                f"At least {required_gib:.2f} GiB of free disk space is required for this model "
+                "and its resumable download cache."
             )
         self.root.mkdir(parents=True, exist_ok=True)
         os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
@@ -128,7 +130,7 @@ class ModelManager:
         for attempt in range(1, 4):
             try:
                 report(
-                    "Downloading the pinned handwriting model "
+                    f"Downloading the pinned model ‘{self.spec.display_name}’ "
                     f"(attempt {attempt}/3). Interrupted downloads resume automatically."
                 )
                 download_started = time.monotonic()
@@ -199,7 +201,7 @@ class ModelManager:
             encoding="utf-8",
         )
         LOGGER.info("Model installation completed and verified")
-        report("Model verified and ready for offline transcription.")
+        report("Model verified and ready for offline use.")
         return self.root
 
     @staticmethod
@@ -234,15 +236,30 @@ class ModelManager:
 
     def remove(self) -> None:
         marker = self.root / "kurrentscholar-model.json"
+        if not self.root.exists():
+            return
+        expected_root = default_data_dir() / "models" / self.spec.revision
         try:
             manifest = json.loads(marker.read_text("utf-8"))
         except (OSError, ValueError) as error:
-            raise OSError("Refusing to remove a directory without a KurrentScholar model manifest") from error
-        if (
+            # Interrupted downloads have no final marker yet. Only the canonical
+            # app-owned directory may be removed in that state; custom paths still
+            # require a verified manifest.
+            try:
+                canonical_partial = self.root.resolve() == expected_root.resolve()
+            except OSError:
+                canonical_partial = False
+            if not canonical_partial:
+                raise OSError(
+                    "Refusing to remove a directory without a KurrentScholar model manifest"
+                ) from error
+            manifest = None
+        if manifest is not None and (
             manifest.get("model_id") != self.spec.model_id
             or manifest.get("revision") != self.spec.revision
-            or self.root.parent == self.root
         ):
             raise OSError("Refusing to remove an unrecognized model directory")
+        if self.root.parent == self.root:
+            raise OSError("Refusing to remove a filesystem root")
         shutil.rmtree(self.root)
 

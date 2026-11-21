@@ -19,6 +19,8 @@ class ModelSpec:
     safetensors_sha256: str
     max_new_tokens: int
     recommended: bool = False
+    kind: str = "recognition"
+    summary: str = ""
 
     @property
     def files(self) -> tuple[str, ...]:
@@ -38,6 +40,7 @@ LEGACY_MODEL = ModelSpec(
     license="MIT",
     max_new_tokens=127,
     recommended=True,
+    summary="Best established choice for predominantly 19th-century German Kurrent.",
     file_sizes={
         "LICENSE": 1_102,
         "README.md": 1_997,
@@ -62,6 +65,7 @@ BROAD_KURRENT_MODEL = ModelSpec(
     doi=None,
     license="MIT",
     max_new_tokens=256,
+    summary="Broader 16th–19th-century comparison model; newer and still experimental.",
     file_sizes={
         "LICENSE": 1_102,
         "README.md": 14_664,
@@ -78,7 +82,62 @@ BROAD_KURRENT_MODEL = ModelSpec(
     safetensors_sha256="054474de1f621f61d1284ee4f274c58def0bb887b1a91694081960fb05dbaf3c",
 )
 
-MODEL_CATALOG = (LEGACY_MODEL, BROAD_KURRENT_MODEL)
+EARLY_KURRENT_MODEL = ModelSpec(
+    key="kurrent-xvi-xviii-2023",
+    display_name="Kurrent (16th–18th century; Swiss-biased)",
+    model_id="dh-unibe/trocr-kurrent-XVI-XVII",
+    revision="c599751f3f93fc80542aa0f4082ecaff0dd952bf",
+    doi="10.57967/hf/0441",
+    license="MIT",
+    max_new_tokens=127,
+    summary=(
+        "For early-modern German Kurrent. Trained on a large but Swiss-biased corpus; "
+        "the authors describe it as a starting point for further fine-tuning."
+    ),
+    file_sizes={
+        "LICENSE": 1_102,
+        "README.md": 2_250,
+        "config.json": 4_874,
+        "generation_config.json": 275,
+        "merges.txt": 456_318,
+        "model.safetensors": 1_335_747_112,
+        "preprocessor_config.json": 325,
+        "special_tokens_map.json": 772,
+        "tokenizer_config.json": 1_118,
+        "vocab.json": 898_822,
+    },
+    safetensors_sha256="dfb88d0a11fecc1fb92152a9d435e16c787bb6190c4995f277e4dfeb2976d065",
+)
+
+HELPER_MODEL = ModelSpec(
+    key="smollm2-135m-instruct",
+    display_name="Local Help Assistant (SmolLM2 135M)",
+    model_id="HuggingFaceTB/SmolLM2-135M-Instruct",
+    revision="12fd25f77366fa6b3b4b768ec3050bf629380bac",
+    doi=None,
+    license="Apache-2.0",
+    max_new_tokens=180,
+    kind="helper",
+    summary=(
+        "Optional English-language, on-device navigation assistant. It never receives "
+        "manuscript images or transcriptions and may occasionally be wrong."
+    ),
+    file_sizes={
+        "README.md": 6_772,
+        "config.json": 861,
+        "generation_config.json": 132,
+        "merges.txt": 466_391,
+        "model.safetensors": 269_060_552,
+        "special_tokens_map.json": 655,
+        "tokenizer.json": 2_104_556,
+        "tokenizer_config.json": 3_764,
+        "vocab.json": 800_662,
+    },
+    safetensors_sha256="5af571cbf074e6d21a03528d2330792e532ca608f24ac70a143f6b369968ab8c",
+)
+
+MODEL_CATALOG = (LEGACY_MODEL, EARLY_KURRENT_MODEL, BROAD_KURRENT_MODEL)
+DOWNLOAD_CATALOG = (*MODEL_CATALOG, HELPER_MODEL)
 DEFAULT_MODEL = LEGACY_MODEL
 
 

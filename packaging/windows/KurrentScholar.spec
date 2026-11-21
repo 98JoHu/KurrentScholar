@@ -22,6 +22,8 @@ hiddenimports = [
     "transformers.models.trocr",
     "transformers.models.vit",
     "transformers.models.roberta",
+    "transformers.models.llama",
+    "openpyxl",
     "pypdfium2._helpers",
 ] + collect_submodules("huggingface_hub")
 

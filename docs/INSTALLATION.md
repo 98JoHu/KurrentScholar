@@ -18,11 +18,12 @@ uv run pytest -m "not real_model"
 uv run kurrentscholar
 ```
 
-Each model download needs about 1.34 GB plus temporary/cache headroom (the app requires 1.8 GB free per
-new installation). If interrupted, choose Install model again; Hugging Face Hub reuses completed files.
+Each recognition-model download needs about 1.34 GB plus temporary/cache headroom; the optional local
+help model is about 0.27 GB. The Model Manager calculates the remaining download plus a 512 MiB safety
+margin. If interrupted, choose Install / repair; Hugging Face Hub reuses completed files.
 
 KurrentScholar verifies the expected file sizes and the pinned weights checksum before marking the model
-ready. If installation fails, retry from **Install model** and inspect
+ready. If installation fails, retry from **Models > Model Manager** and inspect
 `%LOCALAPPDATA%\KurrentScholar\Logs\kurrentscholar.log` for the recorded technical cause. Windows' trust
 store is used for HTTPS, which supports ordinary institutional certificate deployments without disabling
 certificate verification.

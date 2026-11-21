@@ -26,6 +26,7 @@ def main() -> int:
     parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--install-model", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--model-smoke-test", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--helper-smoke-test", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--model-dir", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--report", type=Path, help=argparse.SUPPRESS)
     arguments, qt_arguments = parser.parse_known_args()
@@ -46,10 +47,11 @@ def main() -> int:
     if arguments.version:
         print(__version__)
         return 0
-    if arguments.install_model or arguments.model_smoke_test:
+    if arguments.install_model or arguments.model_smoke_test or arguments.helper_smoke_test:
         from PIL import Image, ImageDraw
 
-        from kurrentscholar.recognition import ModelManager, TrOCRBackend
+        from kurrentscholar.constants import HELPER_MODEL
+        from kurrentscholar.recognition import LocalHelpBackend, ModelManager, TrOCRBackend
 
         report: dict[str, object] = {
             "version": __version__,
@@ -57,7 +59,11 @@ def main() -> int:
             "success": False,
         }
         try:
-            manager = ModelManager(arguments.model_dir)
+            manager = (
+                ModelManager(arguments.model_dir, spec=HELPER_MODEL)
+                if arguments.helper_smoke_test
+                else ModelManager(arguments.model_dir)
+            )
             if arguments.install_model:
                 manager.install(lambda message: logger.info("Model installer: %s", message))
             status = manager.status()
@@ -77,6 +83,13 @@ def main() -> int:
                     "generated_characters": len(result.text),
                     "scored_tokens": len(result.token_probabilities),
                 })
+            if arguments.helper_smoke_test:
+                if not status.installed:
+                    raise RuntimeError("The local helper model is not installed and verified")
+                answer = LocalHelpBackend(status.path).answer("How do I transcribe pages 3 to 5?")
+                if "Transcription >" not in answer:
+                    raise RuntimeError("The local helper did not return its curated page guidance")
+                report.update({"helper_answer": answer, "helper_model": HELPER_MODEL.model_id})
             report["success"] = True
             exit_code = 0
         except Exception as error:

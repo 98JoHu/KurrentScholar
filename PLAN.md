@@ -1,6 +1,6 @@
 # KurrentScholar implementation plan
 
-Status date: 2026-11-20. This plan distinguishes implemented code from release claims. A checked
+Status date: 2026-11-21. This plan distinguishes implemented code from release claims. A checked
 item means code exists; platform packaging is not considered verified until its artifact is built
 and exercised in a clean virtual machine.
 
@@ -44,6 +44,7 @@ Acceptance: a supplied line crop can be recognized on CPU without network access
 - [x] Replaceable segmentation protocol and OpenCV fallback.
 - [x] Reading order and line crop preservation.
 - [x] Incremental processing callback/cancellation contract.
+- [x] Current-page/range/full-document scopes with live committed results during processing.
 - [ ] Add a validated historical-layout model backend.
 
 Acceptance: a scanned page produces ordered line crops with source coordinates; failures remain visible.
@@ -54,7 +55,10 @@ Acceptance: a scanned page produces ordered line crops with source coordinates; 
 - [x] Background page processing, progress, cancellation, and incremental commits.
 - [x] SQLite create/open/autosave/recovery-ready project format.
 - [x] Confidence labels independent of human edits; verified status.
-- [x] TXT, CSV, JSON, and DOCX exports with formula-injection-safe CSV.
+- [x] TXT, CSV, JSON, DOCX, and structured XLSX exports with spreadsheet formula-injection guards.
+- [x] Model manager with verified install/repair/remove state and disk-use reporting.
+- [x] Verified ground-truth bundle export with reference/target scopes and model provenance.
+- [x] First-run tutorial, local curated help assistant, and checksum-guarded source relinking.
 - [ ] Interactive add/resize/reorder line geometry tools.
 - [ ] Full bilingual string catalog and undo command stack.
 

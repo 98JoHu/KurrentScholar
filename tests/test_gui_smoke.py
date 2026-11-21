@@ -10,6 +10,10 @@ def test_main_window_starts(qtbot):
     window = MainWindow(offer_model_on_startup=False)
     qtbot.addWidget(window)
     assert window.windowTitle() == "KurrentScholar"
+    assert window.menuBar().actions()
+    assert "Transcribe current page" in window.actions
+    assert "Transcribe page range…" in window.actions
+    assert "Model Manager" in window.actions
 
 
 @pytest.mark.gui

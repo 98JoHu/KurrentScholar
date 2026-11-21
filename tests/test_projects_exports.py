@@ -2,7 +2,14 @@ import csv
 import json
 
 from kurrentscholar.domain import BoundingBox, ReviewStatus
-from kurrentscholar.exports import ExportOptions, export_csv, export_docx, export_json, export_text
+from kurrentscholar.exports import (
+    ExportOptions,
+    export_csv,
+    export_docx,
+    export_json,
+    export_text,
+    export_xlsx,
+)
 from kurrentscholar.projects import ProjectDatabase
 
 
@@ -88,10 +95,12 @@ def test_exports_are_utf8_structured_and_csv_safe(tmp_path):
     data = tmp_path / "out.json"
     table = tmp_path / "out.csv"
     word = tmp_path / "out.docx"
+    excel = tmp_path / "out.xlsx"
     export_text(project, text, ExportOptions(uncertainty_markers=True))
     export_json(project, data)
     export_csv(project, table)
     export_docx(project, word, ExportOptions(uncertainty_markers=True))
+    export_xlsx(project, excel)
     assert "high_uncertainty" in text.read_text("utf-8")
     payload = json.loads(data.read_text("utf-8"))
     assert payload["lines"][0]["machine_text"] == "=machine"
@@ -101,5 +110,28 @@ def test_exports_are_utf8_structured_and_csv_safe(tmp_path):
         rows = list(csv.reader(stream))
     assert rows[1][3] == "'=machine"
     assert word.stat().st_size > 0
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(excel, read_only=True, data_only=False)
+    assert workbook.sheetnames == ["Transcription", "Summary", "Provenance"]
+    assert workbook["Transcription"]["D2"].value == "'=machine"
+    assert workbook["Transcription"]["F2"].value == "'=machine"
+    assert workbook["Provenance"]["B6"].value == project.document()["sha256"]
+    workbook.close()
+    project.close()
+
+
+def test_relink_accepts_only_the_same_source_bytes(tmp_path):
+    _, project, _ = make_project(tmp_path)
+    moved = tmp_path / "moved-source.bin"
+    moved.write_bytes(b"source")
+    project.relink_document(moved)
+    assert project.document()["source_path"] == str(moved.resolve())
+    different = tmp_path / "different.bin"
+    different.write_bytes(b"different")
+    import pytest
+
+    with pytest.raises(ValueError, match="checksum"):
+        project.relink_document(different)
     project.close()
 

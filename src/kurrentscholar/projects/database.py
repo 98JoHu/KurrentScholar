@@ -183,6 +183,26 @@ class ProjectDatabase:
         row = self.connection.execute("SELECT * FROM documents WHERE id=1").fetchone()
         return dict(row) if row else None
 
+    def relink_document(self, source_path: str | Path) -> None:
+        """Point a moved project at the identical source document."""
+
+        source = Path(source_path).resolve()
+        current = self.document()
+        if current is None:
+            raise ValueError("The project has no source document record")
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        if self.document_hash(source) != current["sha256"]:
+            raise ValueError(
+                "The selected file does not match the source document checksum. "
+                "Choose the original file so page coordinates remain valid."
+            )
+        with self.connection:
+            self.connection.execute(
+                "UPDATE documents SET source_path=?, filename=? WHERE id=1",
+                (str(source), source.name),
+            )
+
     def page(self, page_number: int) -> dict[str, Any] | None:
         row = self.connection.execute(
             "SELECT * FROM pages WHERE page_number=?", (page_number,)

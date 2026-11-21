@@ -24,26 +24,34 @@ yet a measured published requirement.
 2. Follow the ordinary per-user installation steps and launch KurrentScholar.
 3. Confirm the one-time handwriting-model download (about 1.25 GiB at the pinned revision).
 4. Open a historical PDF, PNG, JPEG, or TIFF and create a local research project.
-5. Select **Transcribe**. The page is segmented into individual lines; only line crops reach TrOCR.
-6. Compare source-line overlays with the editable text and review uncertain passages.
-7. Save and reopen the SQLite project; export corrected or original machine text.
+5. Choose the current page, a range such as `3-8,12`, or the full document from **Transcription**.
+   Only detected line crops reach TrOCR.
+6. Follow completed lines live while later lines run; navigate pages, correct text, and mark a line
+   verified only after comparing it with the image.
+7. Save and reopen the SQLite project; export to text, Word, CSV, Excel, or provenance-rich JSON.
 
 No manuscript is uploaded. Network access occurs only when the user starts model installation. The
 default checkpoint is [dh-unibe/trocr-kurrent](https://huggingface.co/dh-unibe/trocr-kurrent), pinned
 to commit `2882072ac68f7aa09353a71092ebd5510f4b82cd`; ordinary recognition then forces local-only
-loading. Bern's newer broad 16th–19th-century checkpoint is available as an experimental comparison,
-not as a claimed accuracy upgrade.
+loading. Bern's MIT-licensed 16th–18th-century checkpoint and its newer broad 16th–19th-century
+checkpoint are optional same-pipeline choices; neither is presented as a universal accuracy upgrade.
 
 ## Current functionality
 
 - Incremental PDF/image rendering and ink-profile/valley line segmentation with source coordinates.
 - Real local TrOCR inference using safetensors, CPU fallback, beam transition scores, and truncation flags.
-- Native two-panel Qt review UI, background transcription, cancellation, autosave, line overlays, manual
-  correction and verification.
+- Native two-panel Qt review UI, selectable page scopes, live background results, cancellation, autosave,
+  line overlays, manual correction and verification.
 - Schema-versioned SQLite projects preserving immutable machine output separately from edited text.
-- A pinned model selector that prevents outputs from different checkpoints being mixed in one project;
-  model changes require an automatic backup and clean retranscription.
-- UTF-8 text, Word, formula-safe CSV, and provenance-rich JSON exports.
+- A model manager showing installed, partial, or damaged downloads and disk use, with safe repair/removal;
+  changing a project's pinned model requires an automatic backup and clean retranscription.
+- UTF-8 text, Word, formula-safe CSV, structured Excel, and provenance-rich JSON exports.
+- Verified-page ground-truth bundles containing line crops, labels, page scopes, checksums, and base-model
+  provenance for external CUDA fine-tuning. KurrentScholar deliberately does not pretend that a one-page
+  CPU training run is reliable; adapted checkpoints require held-out evaluation before use.
+- First-start tutorial with replay, source-document relinking by SHA-256, and an optional Apache-2.0 local
+  SmolLM2 help model. The model is constrained to selecting curated navigation topics so it cannot invent
+  application controls; manuscript content is neither needed nor sent to it.
 - CER/WER evaluation of human-verified project lines, plus confidence-band diagnostics; Windows
   build/installer workflow.
 

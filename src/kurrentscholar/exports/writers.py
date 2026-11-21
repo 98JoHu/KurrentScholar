@@ -137,3 +137,123 @@ def export_docx(project: ProjectDatabase, destination: str | Path, options: Expo
     )
     document.save(str(destination))
 
+
+def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
+    """Create an analysis-friendly workbook without embedding private source paths."""
+
+    from openpyxl import Workbook
+    from openpyxl.formatting.rule import ColorScaleRule
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.worksheet.table import Table, TableStyleInfo
+
+    workbook = Workbook()
+    transcript = workbook.active
+    transcript.title = "Transcription"
+    headers = [
+        "Document", "Page", "Line", "Machine text", "Corrected text", "Effective text",
+        "Confidence", "Uncertainty", "Review status", "X", "Y", "Width", "Height", "Notes",
+    ]
+    transcript.append(headers)
+    document = project.document() or {}
+    thresholds = ConfidenceThresholds()
+    lines = project.lines()
+    for line in lines:
+        transcript.append([
+            _safe_csv(document.get("filename", "")),
+            line.page_number,
+            line.reading_order + 1,
+            _safe_csv(line.machine_text),
+            _safe_csv(line.corrected_text if line.corrected_text is not None else ""),
+            _safe_csv(line.display_text),
+            line.confidence,
+            thresholds.classify(line.confidence).value,
+            line.review_status,
+            line.bbox.x,
+            line.bbox.y,
+            line.bbox.width,
+            line.bbox.height,
+            _safe_csv(line.notes),
+        ])
+    header_fill = PatternFill("solid", fgColor="9A6F6B")
+    for cell in transcript[1]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(vertical="center")
+    transcript.freeze_panes = "A2"
+    transcript.auto_filter.ref = f"A1:N{max(1, transcript.max_row)}"
+    transcript.sheet_view.showGridLines = False
+    widths = [24, 8, 8, 42, 42, 42, 12, 20, 16, 9, 9, 9, 9, 28]
+    for index, width in enumerate(widths, start=1):
+        transcript.column_dimensions[chr(64 + index)].width = width
+    for row in transcript.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for cell in transcript["G"][1:]:
+        cell.number_format = "0.0%"
+    if lines:
+        table = Table(displayName="KurrentScholarTranscription", ref=f"A1:N{transcript.max_row}")
+        table.tableStyleInfo = TableStyleInfo(
+            name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
+            showRowStripes=True, showColumnStripes=False,
+        )
+        transcript.add_table(table)
+        transcript.conditional_formatting.add(
+            f"G2:G{transcript.max_row}",
+            ColorScaleRule(
+                start_type="num", start_value=0, start_color="F2B8B5",
+                mid_type="num", mid_value=0.8, mid_color="FFF0C2",
+                end_type="num", end_value=1, end_color="C7E7D4",
+            ),
+        )
+
+    summary = workbook.create_sheet("Summary")
+    summary.append(["Measure", "Value"])
+    counts: dict[str, int] = {}
+    for line in lines:
+        label = thresholds.classify(line.confidence).value
+        counts[label] = counts.get(label, 0) + 1
+    summary_rows = [
+        ("Document", document.get("filename", "")),
+        ("Pages in source", document.get("page_count", 0)),
+        ("Transcribed lines", len(lines)),
+        ("Corrected lines", sum(line.corrected_text is not None for line in lines)),
+        ("Verified lines", sum(line.review_status == "verified" for line in lines)),
+        ("High confidence", counts.get("higher", 0)),
+        ("Moderate uncertainty", counts.get("moderate", 0)),
+        ("High uncertainty", counts.get("high_uncertainty", 0)),
+        ("Very high uncertainty", counts.get("very_high_uncertainty", 0)),
+        ("Unavailable confidence", counts.get("unavailable", 0)),
+    ]
+    for row in summary_rows:
+        summary.append([_safe_csv(value) for value in row])
+    summary.column_dimensions["A"].width = 28
+    summary.column_dimensions["B"].width = 48
+
+    provenance = workbook.create_sheet("Provenance")
+    provenance.append(["Field", "Value"])
+    model = _model_provenance(project)
+    provenance_rows = {
+        "Software": "KurrentScholar",
+        "Software version": __version__,
+        "Project schema": PROJECT_SCHEMA_VERSION,
+        "Source filename": document.get("filename", ""),
+        "Source SHA-256": document.get("sha256", ""),
+        **project.info(),
+        **model,
+    }
+    for key, value in provenance_rows.items():
+        provenance.append([key.replace("_", " ").title(), _safe_csv(value or "")])
+    provenance.column_dimensions["A"].width = 28
+    provenance.column_dimensions["B"].width = 72
+
+    for sheet in (summary, provenance):
+        sheet.freeze_panes = "A2"
+        sheet.sheet_view.showGridLines = False
+        for cell in sheet[1]:
+            cell.fill = header_fill
+            cell.font = Font(color="FFFFFF", bold=True)
+        for row in sheet.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+    workbook.save(destination)
+

@@ -2,6 +2,24 @@
 
 ## 0.1.3-dev — unreleased
 
+- Added current-page, page-range, and full-document transcription. The project remains open through
+  SQLite WAL while processing, so committed lines appear live and completed pages remain navigable/editable.
+- Replaced the crowded flat toolbar with grouped File, Transcription, Review, Models, View, and Help menus
+  plus a slim primary toolbar; added first-start onboarding and a replayable tutorial.
+- Added native Excel workbooks with transcription, summary, and provenance sheets; Word and CSV now have
+  explicit export entries alongside text and research JSON.
+- Added verified ground-truth ZIP bundles with line crops, UTF-8 labels, source checksum, base-model
+  provenance, reference pages, and intended target pages for responsible external GPU fine-tuning.
+- Added a model manager with installation/repair state, disk usage, safe removal (including partial
+  downloads), and project model selection. Added Bern's MIT 16th–18th-century TrOCR checkpoint.
+- Added an optional Apache-2.0 SmolLM2 135M local help model. A real-weight audit showed that unrestricted
+  generation fabricated UI instructions, so the released design constrains it to intent classification
+  and returns curated, tested navigation guidance instead.
+- Added OpenEarable-inspired warm rose accents, pale backgrounds, flat rounded surfaces, and quieter
+  uncertainty colors without copying its assets or functionality.
+- Prevented accidental project replacement without a second explicit confirmation and added moved-source
+  relinking guarded by the original SHA-256 checksum.
+
 - Added a pinned model catalog with Bern's broad 16th–19th-century Kurrent checkpoint as an experimental
   comparison while preserving the original 19th-century checkpoint as the established default.
 - Added safe per-project model selection. A project cannot silently mix checkpoints; changing models

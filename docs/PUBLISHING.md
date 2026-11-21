@@ -7,7 +7,7 @@
    verify its SHA-256.
 4. Install/start/import/transcribe/save/reopen/export/uninstall on a clean Windows 10 or 11 x64 VM without
    Python. Confirm a real model installation and open DOCX/XLSX exports in Microsoft Office.
-5. Commit and push, then create an annotated tag such as `v0.1.3` at that exact commit. Pushing the tag
+5. Commit and push, then create an annotated tag such as `v1.0.0` at that exact commit. Pushing the tag
    runs the Windows release workflow; after tests and the packaged smoke test pass, it creates the GitHub
    Release and attaches the stable-name installer plus `SHA256SUMS.txt`.
 6. Download the published asset through the README's direct link and compare its hash. The installer is

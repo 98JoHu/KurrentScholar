@@ -123,7 +123,7 @@ recognition model recorded in the project or export. GitHub's **Cite this reposi
   author       = {Hummel, Jonas},
   title        = {KurrentScholar: Offline Historical Kurrent Handwriting Transcription},
   year         = {2026},
-  version      = {0.1.3},
+  version      = {1.0.0},
   institution  = {Karlsruhe Institute of Technology (KIT)},
   url          = {https://github.com/98JoHu/KurrentScholar},
   license      = {MIT}

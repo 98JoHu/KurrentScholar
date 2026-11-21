@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.3 — 2026-11-21
+## 1.0.0 — 2026-11-21
 
 - Fixed Excel repair warnings by removing the duplicate worksheet/table AutoFilter declaration and
   omitting empty inline-string cells; validated the repaired output in desktop Microsoft Excel.

@@ -18,8 +18,8 @@ uv run pytest -m "not real_model"
 uv run kurrentscholar
 ```
 
-The model download needs 1,340,570,347 bytes plus temporary/cache headroom (the app requires 1.8 GB free).
-If interrupted, choose Install model again; Hugging Face Hub reuses completed files.
+Each model download needs about 1.34 GB plus temporary/cache headroom (the app requires 1.8 GB free per
+new installation). If interrupted, choose Install model again; Hugging Face Hub reuses completed files.
 
 KurrentScholar verifies the expected file sizes and the pinned weights checksum before marking the model
 ready. If installation fails, retry from **Install model** and inspect

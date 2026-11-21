@@ -2,8 +2,15 @@
 
 ## 0.1.3-dev — unreleased
 
+- Added a pinned model catalog with Bern's broad 16th–19th-century Kurrent checkpoint as an experimental
+  comparison while preserving the original 19th-century checkpoint as the established default.
+- Added safe per-project model selection. A project cannot silently mix checkpoints; changing models
+  requires a complete backup before resetting derived transcription results.
+- Added verified-line project evaluation with CER, WER, exact-line rate, and confidence-band diagnostics.
+  Unverified edits are excluded so incomplete corrections cannot become accidental ground truth.
+- Fixed export provenance to cite the model actually recorded in the project.
 - Enabled autoregressive decoder key/value caching during TrOCR inference. This retains the pinned FP32
-  model, processor, greedy decoding, token limit, and confidence scoring while avoiding repeated decoder
+  model, processor, four-beam decoding, token limit, and confidence scoring while avoiding repeated decoder
   work; a real-crop benchmark produced identical text with roughly 2.4× higher throughput.
 - Added affinity-aware CPU runtime configuration and diagnostics. PyTorch's hardware-tuned thread defaults
   are retained unless they exceed the processors available to the process, while explicit OpenMP/MKL

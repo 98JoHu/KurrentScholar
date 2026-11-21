@@ -29,3 +29,8 @@ from generation tokens through byte-level spacing to edited word/character spans
 KurrentScholar therefore refuses to fabricate word-level spatial or textual precision. Lines that exhaust
 the configured generation limit without EOS are flagged as potentially truncated.
 
+The **Evaluate corrections** action measures CER/WER only after a human marks lines verified. Its
+confidence-band table can reveal whether the score ranks errors usefully for a particular collection, but
+it does not automatically change thresholds. A representative, writer-separated calibration set is still
+required before changing the defaults.
+

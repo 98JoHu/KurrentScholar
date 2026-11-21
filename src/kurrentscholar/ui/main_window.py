@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from datetime import datetime
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsView,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -31,10 +33,17 @@ from PySide6.QtWidgets import (
 )
 
 from kurrentscholar import __version__
-from kurrentscholar.constants import APP_NAME, MODEL_ID, MODEL_REQUIRED_BYTES, MODEL_REVISION
+from kurrentscholar.constants import (
+    APP_NAME,
+    DEFAULT_MODEL,
+    MODEL_CATALOG,
+    ModelSpec,
+    find_model,
+)
 from kurrentscholar.diagnostics import exception_details, log_path
 from kurrentscholar.document_processing import DocumentRenderer
 from kurrentscholar.domain import ConfidenceThresholds, ReviewStatus
+from kurrentscholar.evaluation import evaluate_project_lines
 from kurrentscholar.exports import ExportOptions, export_csv, export_docx, export_json, export_text
 from kurrentscholar.projects import ProjectDatabase
 from kurrentscholar.recognition import ModelManager, TrOCRBackend
@@ -48,11 +57,19 @@ class ProcessingWorker(QObject):
     finished = Signal(bool)
     failed = Signal(str, str)
 
-    def __init__(self, project_path: Path, pages: list[int], model_path: Path, dpi: int = 300) -> None:
+    def __init__(
+        self,
+        project_path: Path,
+        pages: list[int],
+        model_path: Path,
+        model_spec: ModelSpec,
+        dpi: int = 300,
+    ) -> None:
         super().__init__()
         self.project_path = project_path
         self.pages = pages
         self.model_path = model_path
+        self.model_spec = model_spec
         self.dpi = dpi
         self.cancel_event = threading.Event()
 
@@ -82,13 +99,17 @@ class ProcessingWorker(QObject):
                         "Open it in KurrentScholar and choose Re-segment so the existing "
                         "results are backed up before replacement."
                     )
-                recognizer = TrOCRBackend(self.model_path)
+                recognizer = TrOCRBackend(
+                    self.model_path,
+                    max_new_tokens=self.model_spec.max_new_tokens,
+                    model_id=self.model_spec.model_id,
+                )
                 LOGGER.info("Loading recognition model from %s", self.model_path)
                 recognizer.load()
                 LOGGER.info("Recognition model loaded")
                 project.set_info({
-                    "model_id": MODEL_ID,
-                    "model_revision": MODEL_REVISION,
+                    "model_id": self.model_spec.model_id,
+                    "model_revision": self.model_spec.revision,
                     "segmentation_backend": segmenter.backend_id,
                     "segmentation_version": segmenter.version,
                 })
@@ -204,7 +225,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
         self.setAcceptDrops(True)
         self.renderer = DocumentRenderer()
-        self.model_manager = ModelManager()
+        self.model_manager = ModelManager(spec=DEFAULT_MODEL)
         self.project: ProjectDatabase | None = None
         self.project_path: Path | None = None
         self.current_page = 1
@@ -280,8 +301,10 @@ class MainWindow(QMainWindow):
             ("Next page", lambda: self._change_page(1), None),
             ("Transcribe", self.transcribe, None),
             ("Re-segment", self.resegment, None),
+            ("Recognition model", self.select_recognition_model, None),
             ("Save", self.save_current_edit, QKeySequence.Save),
             ("Export", self.export_project, None),
+            ("Evaluate corrections", self.evaluate_corrections, None),
             ("Install model", self.install_model, None),
             ("Zoom in", lambda: self.viewer.scale(1.2, 1.2), QKeySequence.ZoomIn),
             ("Zoom out", lambda: self.viewer.scale(1 / 1.2, 1 / 1.2), QKeySequence.ZoomOut),
@@ -478,14 +501,92 @@ class MainWindow(QMainWindow):
                 self._overlays.append(rect)
         self.line_list.blockSignals(False)
 
+    def _project_model_spec(self) -> ModelSpec:
+        if not self.project:
+            return DEFAULT_MODEL
+        info = self.project.info()
+        model_id = info.get("model_id")
+        revision = info.get("model_revision")
+        if not model_id and not revision:
+            return DEFAULT_MODEL
+        spec = find_model(model_id or "", revision or "")
+        if spec is None:
+            raise ValueError(
+                "This project uses an unknown recognition model "
+                f"({model_id or 'missing id'} at {revision or 'missing revision'}). "
+                "Its existing results remain readable, but KurrentScholar will not mix them "
+                "with output from a different model."
+            )
+        return spec
+
+    @Slot()
+    def select_recognition_model(self) -> None:
+        if not self.project:
+            self._error("No project is open", "Open or create a project first.")
+            return
+        try:
+            current = self._project_model_spec()
+        except ValueError as error:
+            self._error("The project model is unavailable", str(error))
+            return
+        labels = [spec.display_name for spec in MODEL_CATALOG]
+        selected_label, accepted = QInputDialog.getItem(
+            self,
+            "Recognition model",
+            "Choose the model for future transcription in this project.\n"
+            "Changing a processed project requires a backed-up clean retranscription.",
+            labels,
+            labels.index(current.display_name),
+            False,
+        )
+        if not accepted:
+            return
+        selected = next(spec for spec in MODEL_CATALOG if spec.display_name == selected_label)
+        if selected == current:
+            self.status_label.setText(f"Recognition model: {current.display_name}")
+            return
+        manager = ModelManager(spec=selected)
+        if not manager.status().installed:
+            self._error(
+                "The selected model is not installed",
+                f"Choose Install model, install ‘{selected.display_name}’, then select it again. "
+                "No project data was changed.",
+            )
+            return
+        summary = self.project.transcription_summary()
+        if summary["line_count"] and not self._backup_and_reset_transcription(
+            f"Changing from ‘{current.display_name}’ to ‘{selected.display_name}’ requires "
+            "replacing the current machine transcription.",
+            operation="change recognition model",
+            backup_suffix="before-model-change",
+        ):
+            return
+        self.project.set_info({
+            "model_id": selected.model_id,
+            "model_revision": selected.revision,
+        })
+        self.model_manager = manager
+        self.status_label.setText(
+            f"Recognition model changed to {selected.display_name}. Choose Transcribe to process the document."
+        )
+
     @Slot()
     def transcribe(self) -> None:
         if not self.project or not self.project_path:
             self._error("No project is open", "Open a manuscript first.")
             return
+        try:
+            model_spec = self._project_model_spec()
+        except ValueError as error:
+            self._error("The project model is unavailable", str(error))
+            return
+        self.model_manager = ModelManager(spec=model_spec)
         status = self.model_manager.status()
         if not status.installed:
-            self._error("The handwriting model is not installed", "Choose Install model and retry.")
+            self._error(
+                "The project’s handwriting model is not installed",
+                f"Install ‘{model_spec.display_name}’ and retry. Existing project results were not changed.",
+            )
             return
         document = self.project.document()
         if not document:
@@ -503,7 +604,7 @@ class MainWindow(QMainWindow):
                 "cannot safely be matched to the new line-level boxes."
             ):
                 return
-        self._start_transcription(document, status.path)
+        self._start_transcription(document, status.path, model_spec)
 
     @Slot()
     def resegment(self) -> None:
@@ -517,7 +618,12 @@ class MainWindow(QMainWindow):
             return
         self.transcribe()
 
-    def _backup_and_reset_transcription(self, reason: str) -> bool:
+    def _backup_and_reset_transcription(
+        self,
+        reason: str,
+        operation: str = "re-segment",
+        backup_suffix: str = "before-resegment",
+    ) -> bool:
         if not self.project or not self.project_path:
             return False
         summary = self.project.transcription_summary()
@@ -530,7 +636,7 @@ class MainWindow(QMainWindow):
         )
         answer = QMessageBox.question(
             self,
-            "Back up and re-segment?",
+            f"Back up and {operation}?",
             f"{reason}\n\nThe current {summary['line_count']} line result(s) will be saved "
             f"in a separate backup project before replacement.{protected_message}\n\n"
             "Continue?",
@@ -542,7 +648,7 @@ class MainWindow(QMainWindow):
 
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         base = self.project_path.with_name(
-            f"{self.project_path.stem}.before-resegment-{stamp}.ksproj"
+            f"{self.project_path.stem}.{backup_suffix}-{stamp}.ksproj"
         )
         backup_path = base
         counter = 2
@@ -566,12 +672,17 @@ class MainWindow(QMainWindow):
             )
             return False
 
-    def _start_transcription(self, document: dict, model_path: Path) -> None:
+    def _start_transcription(
+        self,
+        document: dict,
+        model_path: Path,
+        model_spec: ModelSpec,
+    ) -> None:
         pages = list(range(document["page_count"]))
         self.project.close()
         self.project = None
         self._thread = QThread(self)
-        self._worker = ProcessingWorker(self.project_path, pages, model_path)
+        self._worker = ProcessingWorker(self.project_path, pages, model_path, model_spec)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._processing_progress = QProgressDialog(
@@ -676,23 +787,49 @@ class MainWindow(QMainWindow):
         self._thread = None
 
     def _set_processing_busy(self, busy: bool) -> None:
-        for name in ("Open document", "Open project", "Transcribe", "Re-segment", "Export"):
+        for name in (
+            "Open document",
+            "Open project",
+            "Transcribe",
+            "Re-segment",
+            "Recognition model",
+            "Export",
+            "Evaluate corrections",
+        ):
             self.actions[name].setEnabled(not busy)
 
     @Slot()
     def install_model(self) -> None:
+        labels = []
+        for spec in MODEL_CATALOG:
+            installed = ModelManager(spec=spec).status().installed
+            labels.append(spec.display_name + (" — installed" if installed else ""))
+        selected_label, accepted = QInputDialog.getItem(
+            self,
+            "Install handwriting model",
+            "Choose a pinned model. Both remain available offline after installation.",
+            labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        selected_index = labels.index(selected_label)
+        self.model_manager = ModelManager(spec=MODEL_CATALOG[selected_index])
         if self.model_manager.status().installed:
             QMessageBox.information(
                 self,
                 "Handwriting model installed",
-                "The pinned handwriting model is already installed and verified.",
+                f"‘{self.model_manager.spec.display_name}’ is already installed and verified.",
             )
             return
+        size_gib = self.model_manager.spec.required_bytes / (1024 ** 3)
         answer = QMessageBox.question(
             self,
             "Install handwriting model",
-            "Download 1.34 GB of model files now? This contacts Hugging Face only for the model; no documents "
-            "or transcriptions are sent. The pinned model is separate from KurrentScholar and works offline afterward.",
+            f"Download {size_gib:.2f} GiB for ‘{self.model_manager.spec.display_name}’ now? "
+            "This contacts Hugging Face only for the model; no documents or transcriptions are sent. "
+            "The pinned model is separate from KurrentScholar and works offline afterward.",
         )
         if answer != QMessageBox.Yes:
             return
@@ -805,10 +942,11 @@ class MainWindow(QMainWindow):
         if not self._install_progress or self._install_phase != "download":
             return
         downloaded = self.model_manager.downloaded_bytes()
-        value = min(999, int(downloaded * 1000 / MODEL_REQUIRED_BYTES))
+        required = self.model_manager.spec.required_bytes
+        value = min(999, int(downloaded * 1000 / required))
         self._install_progress.setValue(value)
         gib = downloaded / (1024 ** 3)
-        total_gib = MODEL_REQUIRED_BYTES / (1024 ** 3)
+        total_gib = required / (1024 ** 3)
         self._install_progress.setLabelText(
             f"Downloading the handwriting model: {gib:.2f} of {total_gib:.2f} GiB. "
             "Completed data is reused after interruptions."
@@ -864,6 +1002,40 @@ class MainWindow(QMainWindow):
         self.status_label.setText("No later uncertain line on this page.")
 
     @Slot()
+    def evaluate_corrections(self) -> None:
+        if not self.project:
+            self._error("No project is open", "Open a project first.")
+            return
+        self.save_current_edit()
+        report = evaluate_project_lines(self.project.lines())
+        verified = int(report["verified_reference_lines"])
+        if not verified:
+            QMessageBox.information(
+                self,
+                "No verified ground truth yet",
+                "This project contains no human-verified lines. Model scores alone cannot measure "
+                "transcription accuracy or calibrate the uncertainty labels. Correct a representative "
+                "sample, compare every line with the image, and mark those lines as verified first.",
+            )
+            return
+        cer = report["cer"]["rate"] * 100
+        wer = report["wer"]["rate"] * 100
+        exact = report["exact_line_rate"] * 100
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Verified-line evaluation")
+        dialog.setIcon(QMessageBox.Information)
+        dialog.setText(
+            f"{verified} verified line(s): CER {cer:.2f}%, WER {wer:.2f}%, "
+            f"exact lines {exact:.1f}%."
+        )
+        dialog.setInformativeText(
+            "These results apply only to the verified sample. Expand it across pages, handwriting "
+            "styles, short fragments, and difficult lines before comparing models."
+        )
+        dialog.setDetailedText(json.dumps(report, ensure_ascii=False, indent=2))
+        dialog.exec()
+
+    @Slot()
     def export_project(self) -> None:
         if not self.project:
             return
@@ -888,12 +1060,16 @@ class MainWindow(QMainWindow):
             self._error("The export could not be created", str(error))
 
     def about(self) -> None:
+        models = "\n".join(
+            f"• {spec.model_id}\n  revision {spec.revision}"
+            for spec in MODEL_CATALOG
+        )
         QMessageBox.about(
             self, "About KurrentScholar",
             f"KurrentScholar {__version__}\n\nOffline historical handwriting research assistant.\n\n"
-            f"Recognition model: {MODEL_ID}\nRevision: {MODEL_REVISION}\nDOI: 10.57967/hf/0442\n"
-            "Model developed by Jonas Widmer and Tobias Hodel with the institutions acknowledged upstream; "
-            "KurrentScholar did not develop or train it. MIT-licensed application and model."
+            f"Available pinned recognition models:\n{models}\n\n"
+            "Models developed by Digital Humanities at the University of Bern and their collaborators; "
+            "KurrentScholar did not develop or train them. MIT-licensed application and models."
         )
 
     @Slot()

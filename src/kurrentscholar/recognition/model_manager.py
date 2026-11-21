@@ -12,12 +12,8 @@ from pathlib import Path
 
 from kurrentscholar.constants import (
     APP_NAME,
-    MODEL_FILE_SIZES,
-    MODEL_FILES,
-    MODEL_ID,
-    MODEL_REQUIRED_BYTES,
-    MODEL_REVISION,
-    MODEL_SAFETENSORS_SHA256,
+    DEFAULT_MODEL,
+    ModelSpec,
     default_data_dir,
 )
 from kurrentscholar.diagnostics import exception_details
@@ -40,13 +36,14 @@ class ModelStatus:
 
 
 class ModelManager:
-    def __init__(self, root: Path | None = None) -> None:
-        self.root = root or default_data_dir() / "models" / MODEL_REVISION
+    def __init__(self, root: Path | None = None, spec: ModelSpec = DEFAULT_MODEL) -> None:
+        self.spec = spec
+        self.root = root or default_data_dir() / "models" / spec.revision
 
     def status(self) -> ModelStatus:
         missing = []
         invalid = []
-        for name, expected in MODEL_FILE_SIZES.items():
+        for name, expected in self.spec.file_sizes.items():
             path = self.root / name
             try:
                 if not path.is_file():
@@ -59,28 +56,29 @@ class ModelManager:
         try:
             manifest = json.loads((self.root / "kurrentscholar-model.json").read_text("utf-8"))
             manifest_ok = (
-                manifest.get("revision") == MODEL_REVISION
-                and manifest.get("model_safetensors_sha256") == MODEL_SAFETENSORS_SHA256
+                manifest.get("model_id") == self.spec.model_id
+                and manifest.get("revision") == self.spec.revision
+                and manifest.get("model_safetensors_sha256") == self.spec.safetensors_sha256
             )
         except (OSError, ValueError):
             pass
         return ModelStatus(
             not missing and not invalid and manifest_ok,
             self.root,
-            MODEL_REVISION,
-            MODEL_REQUIRED_BYTES,
+            self.spec.revision,
+            self.spec.required_bytes,
             tuple(missing),
             tuple(invalid),
         )
 
     def check_disk_space(self) -> bool:
         self.root.parent.mkdir(parents=True, exist_ok=True)
-        remaining = max(0, MODEL_REQUIRED_BYTES - self.downloaded_bytes())
+        remaining = max(0, self.spec.required_bytes - self.downloaded_bytes())
         return shutil.disk_usage(self.root.parent).free >= remaining + 512 * 1024 * 1024
 
     def downloaded_bytes(self) -> int:
         completed = 0
-        for name, expected in MODEL_FILE_SIZES.items():
+        for name, expected in self.spec.file_sizes.items():
             path = self.root / name
             try:
                 if path.is_file():
@@ -98,7 +96,7 @@ class ModelManager:
                 )
             except OSError:
                 pass
-        return min(MODEL_REQUIRED_BYTES, completed + partial)
+        return min(self.spec.required_bytes, completed + partial)
 
     def install(self, progress: Callable[[str], None] | None = None) -> Path:
         def report(message: str) -> None:
@@ -120,7 +118,12 @@ class ModelManager:
 
         disable_progress_bars()
 
-        LOGGER.info("Installing %s at revision %s into %s", MODEL_ID, MODEL_REVISION, self.root)
+        LOGGER.info(
+            "Installing %s at revision %s into %s",
+            self.spec.model_id,
+            self.spec.revision,
+            self.root,
+        )
         last_error: Exception | None = None
         for attempt in range(1, 4):
             try:
@@ -130,10 +133,10 @@ class ModelManager:
                 )
                 download_started = time.monotonic()
                 snapshot_download(
-                    repo_id=MODEL_ID,
-                    revision=MODEL_REVISION,
+                    repo_id=self.spec.model_id,
+                    revision=self.spec.revision,
                     local_dir=self.root,
-                    allow_patterns=list(MODEL_FILES),
+                    allow_patterns=list(self.spec.files),
                     max_workers=2,
                 )
                 LOGGER.info(
@@ -167,13 +170,13 @@ class ModelManager:
                     (self.root / name).unlink(missing_ok=True)
             raise ModelInstallError("The model download is incomplete (" + "; ".join(details) + ").")
         report(
-            "Verifying model integrity (about 1.34 GB). This can take a little while; "
-            "KurrentScholar remains usable."
+            f"Verifying model integrity (about {self.spec.required_bytes / 1_000_000_000:.2f} GB). "
+            "This can take a little while; KurrentScholar remains usable."
         )
         hash_started = time.monotonic()
         actual_hash = self._sha256(self.root / "model.safetensors")
         LOGGER.info("Model checksum completed after %.1f seconds", time.monotonic() - hash_started)
-        if actual_hash != MODEL_SAFETENSORS_SHA256:
+        if actual_hash != self.spec.safetensors_sha256:
             LOGGER.error("Safetensors checksum mismatch: %s", actual_hash)
             # Hugging Face Hub will fetch the file again on the next retry when
             # the corrupt destination is absent; its resumable cache is retained.
@@ -186,10 +189,10 @@ class ModelManager:
         (self.root / "kurrentscholar-model.json").write_text(
             json.dumps(
                 {
-                    "model_id": MODEL_ID,
-                    "revision": MODEL_REVISION,
-                    "files": MODEL_FILE_SIZES,
-                    "model_safetensors_sha256": MODEL_SAFETENSORS_SHA256,
+                    "model_id": self.spec.model_id,
+                    "revision": self.spec.revision,
+                    "files": self.spec.file_sizes,
+                    "model_safetensors_sha256": self.spec.safetensors_sha256,
                 },
                 indent=2,
             ),
@@ -235,7 +238,11 @@ class ModelManager:
             manifest = json.loads(marker.read_text("utf-8"))
         except (OSError, ValueError) as error:
             raise OSError("Refusing to remove a directory without a KurrentScholar model manifest") from error
-        if manifest.get("revision") != MODEL_REVISION or self.root.parent == self.root:
+        if (
+            manifest.get("model_id") != self.spec.model_id
+            or manifest.get("revision") != self.spec.revision
+            or self.root.parent == self.root
+        ):
             raise OSError("Refusing to remove an unrecognized model directory")
         shutil.rmtree(self.root)
 

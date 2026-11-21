@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from kurrentscholar import __version__
-from kurrentscholar.constants import MODEL_DOI, MODEL_ID, MODEL_REVISION, PROJECT_SCHEMA_VERSION
+from kurrentscholar.constants import DEFAULT_MODEL, PROJECT_SCHEMA_VERSION, find_model
 from kurrentscholar.domain import ConfidenceThresholds
 from kurrentscholar.projects import ProjectDatabase
 
@@ -27,6 +27,18 @@ def _safe_csv(value: object) -> object:
     if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")):
         return "'" + value
     return value
+
+
+def _model_provenance(project: ProjectDatabase) -> dict[str, str | None]:
+    info = project.info()
+    model_id = info.get("model_id", DEFAULT_MODEL.model_id)
+    revision = info.get("model_revision", DEFAULT_MODEL.revision)
+    spec = find_model(model_id, revision)
+    return {
+        "model_id": model_id,
+        "model_revision": revision,
+        "model_doi": spec.doi if spec else None,
+    }
 
 
 def export_text(project: ProjectDatabase, destination: str | Path, options: ExportOptions) -> None:
@@ -63,16 +75,15 @@ def export_csv(project: ProjectDatabase, destination: str | Path) -> None:
 
 
 def export_json(project: ProjectDatabase, destination: str | Path) -> None:
+    model = _model_provenance(project)
     payload = {
         "schema": "urn:kurrentscholar:export:1",
         "schema_version": PROJECT_SCHEMA_VERSION,
         "provenance": {
             "software": "KurrentScholar",
             "software_version": __version__,
-            "model_id": MODEL_ID,
-            "model_revision": MODEL_REVISION,
-            "model_doi": MODEL_DOI,
             **project.info(),
+            **model,
         },
         "document": {
             key: value
@@ -118,9 +129,11 @@ def export_docx(project: ProjectDatabase, destination: str | Path, options: Expo
         if options.uncertainty_markers and label in colors:
             run.font.highlight_color = colors[label]
             paragraph.add_run(f" [{label.replace('_', ' ')}]")
+    model = _model_provenance(project)
+    doi = f", doi:{model['model_doi']}" if model["model_doi"] else ""
     document.add_paragraph(
-        f"Created with KurrentScholar {__version__}; recognition model {MODEL_ID} "
-        f"({MODEL_REVISION}, doi:{MODEL_DOI}). Machine output may contain errors."
+        f"Created with KurrentScholar {__version__}; recognition model {model['model_id']} "
+        f"({model['model_revision']}{doi}). Machine output may contain errors."
     )
     document.save(str(destination))
 

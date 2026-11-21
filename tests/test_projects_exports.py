@@ -83,6 +83,7 @@ def test_project_backup_and_transcription_reset_preserve_source(tmp_path):
 
 def test_exports_are_utf8_structured_and_csv_safe(tmp_path):
     _, project, _ = make_project(tmp_path)
+    project.set_info({"model_id": "example/model", "model_revision": "pinned-revision"})
     text = tmp_path / "out.txt"
     data = tmp_path / "out.json"
     table = tmp_path / "out.csv"
@@ -92,7 +93,10 @@ def test_exports_are_utf8_structured_and_csv_safe(tmp_path):
     export_csv(project, table)
     export_docx(project, word, ExportOptions(uncertainty_markers=True))
     assert "high_uncertainty" in text.read_text("utf-8")
-    assert json.loads(data.read_text("utf-8"))["lines"][0]["machine_text"] == "=machine"
+    payload = json.loads(data.read_text("utf-8"))
+    assert payload["lines"][0]["machine_text"] == "=machine"
+    assert payload["provenance"]["model_id"] == "example/model"
+    assert payload["provenance"]["model_revision"] == "pinned-revision"
     with table.open(encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.reader(stream))
     assert rows[1][3] == "'=machine"

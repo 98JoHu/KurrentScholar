@@ -11,6 +11,12 @@ page segmentation, different archives, Sütterlin, earlier hands, damage, or edi
 - For both, `rate = (substitutions + insertions + deletions) / reference units`.
 - Empty-reference rate is 0 for an empty hypothesis and 1 for a nonempty hypothesis.
 
+`kurrentscholar-evaluate --project research.ksproj` evaluates only lines explicitly marked verified.
+For corrected verified lines, the correction is the reference and immutable machine output is the
+hypothesis. A verified line that needed no edit is an exact reference. Unverified edits are excluded so
+an interrupted correction cannot silently enter the ground truth. The report includes aggregate CER/WER,
+exact-line rate, and the same metrics grouped by the provisional model-score labels.
+
 The utility reports substitutions, insertions, deletions, distance, denominator, and rate. Evaluation must
 separate (a) provided ground-truth line crops, measuring recognizer behavior, from (b) complete pages,
 measuring segmentation plus recognition. Line matching and missed/extra-region rules must be published

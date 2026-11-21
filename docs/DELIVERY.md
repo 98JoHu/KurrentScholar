@@ -5,14 +5,15 @@ public release claim.
 
 ## Implemented
 
-- Revision-pinned safe model manifest/download and local-only CPU TrOCR adapter.
+- Revision-pinned model catalog/download and local-only CPU TrOCR adapter, with safe per-project model
+  provenance and model-change backups.
 - Genuine generation transition-score extraction, line confidence, and truncation indication.
 - PDF/image import, bounded incremental rendering, OpenCV fallback line detection, coordinates/order.
 - Responsive two-panel Qt editor with overlays, background transcription, cancel, autosave, corrections,
   verification state, project reopen, and explicit nontechnical errors.
 - Schema-versioned SQLite research records with document hash, provenance, immutable machine text,
   human text, confidence evidence, metadata storage, and correction history.
-- TXT, DOCX, CSV, and JSON exporters; CER/WER evaluation utility.
+- TXT, DOCX, CSV, and JSON exporters; verified-line project CER/WER and confidence-band evaluation.
 - English/German entry documentation, architecture, confidence, privacy, evaluation, methods,
   troubleshooting, publishing, citation, and third-party inventory.
 - Reproducible dependency lock, CI, PyInstaller bundle, and Inno Setup installer/checksum workflow.
@@ -20,9 +21,11 @@ public release claim.
 ## Actual verification
 
 - Ruff: passed.
-- Consolidated suite with the pinned model enabled: 28 passed in 20.06 seconds.
-- The pinned model loaded locally on CPU, generated text, and returned bounded token transition
-  probabilities; downloaded runtime files contained no excluded pickle/training weights.
+- Regression suite: 41 passed, 1 opt-in real-model test skipped; the real-model test then passed
+  separately against the newly installed recommended checkpoint.
+- Both the source and packaged application loaded the new broad comparison model locally on CPU, generated
+  text, and returned bounded token transition probabilities. A read-only low-confidence crop from the
+  supplied manuscript also completed end to end; it is not accuracy ground truth.
 - Source Qt offscreen startup: passed.
 - PyInstaller Windows one-directory build: succeeded on Python 3.11.14.
 - Packaged executable offscreen startup: exit 0. Packaged model installation/integrity verification and
@@ -30,8 +33,8 @@ public release claim.
 - Inno Setup 7.1.1 compile: succeeded (verified signed compiler, non-commercial use).
 - The installer workflow previously passed a local install/start/uninstall cycle; the current corrected
   bundle passed packaged startup and model inference checks and still requires clean-VM acceptance.
-- Installer size: 177,450,902 bytes.
-- Installer SHA-256: `2d5da17cf20a13e6932be9d0aab370546ad55414c0eddd2636d7ffd2482acf9b`.
+- Installer size: 177,463,374 bytes.
+- Installer SHA-256: `56ef024ea5da2d85c16d3915ba61551396970b85da20595ad1cac8573de19c9e`.
 
 Artifact paths:
 
@@ -43,9 +46,9 @@ Generated binaries are ignored by Git and must not be committed.
 
 ## Incomplete or unverified
 
-- The pinned 1.34 GB model was downloaded and real local CPU inference was executed, but only with a
-  synthetic architecture/score smoke input. A legally reusable archival line/page and ground truth are
-  still required for accuracy and full-page end-to-end evidence.
+- The broad comparison model was downloaded and real local CPU inference was executed with a synthetic
+  architecture/score smoke input and one user-supplied manuscript crop. Reusable ground truth is still
+  required for any accuracy claim and representative full-page evaluation.
 - No clean Windows VM test, real scanned-PDF end-to-end test, model-download cancellation test,
   performance benchmark, confidence calibration, or installer code signing.
 - Fallback segmentation is not validated for complex historical layout; manual geometry editing is absent.

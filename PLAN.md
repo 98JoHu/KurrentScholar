@@ -1,17 +1,20 @@
 # KurrentScholar implementation plan
 
-Status date: 2026-11-19. This plan distinguishes implemented code from release claims. A checked
+Status date: 2026-11-20. This plan distinguishes implemented code from release claims. A checked
 item means code exists; platform packaging is not considered verified until its artifact is built
 and exercised in a clean virtual machine.
 
 ## Constraints and decisions
 
-- The pinned recognition model is `dh-unibe/trocr-kurrent` revision
-  `2882072ac68f7aa09353a71092ebd5510f4b82cd` (MIT). It is a line-image
-  `VisionEncoderDecoderModel`; full pages must never be sent to it.
+- The established default recognition model is `dh-unibe/trocr-kurrent` revision
+  `2882072ac68f7aa09353a71092ebd5510f4b82cd`. The broader
+  `dh-unibe/trocr-german-kurrent-xvi-xix-from-kurrent-v2` revision
+  `bd1d96b67225b580846d7759f6ba74c66f56680e` is offered as an experimental comparison, not a claimed
+  accuracy upgrade. Both are MIT line-image `VisionEncoderDecoderModel` checkpoints; full pages must
+  never be sent to them.
 - Only the safetensors checkpoint and runtime configuration/tokenizer files are downloaded. The
-  redundant pickle checkpoint and training state are excluded. Required files total 1,340,570,347
-  bytes at the pinned revision (about 1.25 GiB / 1.34 GB decimal).
+  redundant pickle checkpoints and training state are excluded. Each runtime set is approximately
+  1.25 GiB / 1.34 GB decimal.
 - Python 3.11 is the release baseline. Versions are pinned in `pyproject.toml` and the resolved
   environment is recorded in `uv.lock`.
 - Kraken is not an initial hard dependency: its native Windows packaging and model distribution

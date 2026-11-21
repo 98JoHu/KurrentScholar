@@ -22,15 +22,17 @@ yet a measured published requirement.
 
 1. Download and open the Windows installer from GitHub Releases.
 2. Follow the ordinary per-user installation steps and launch KurrentScholar.
-3. Confirm the one-time handwriting-model download (1,340,570,347 required bytes at the pinned revision).
+3. Confirm the one-time handwriting-model download (about 1.25 GiB at the pinned revision).
 4. Open a historical PDF, PNG, JPEG, or TIFF and create a local research project.
 5. Select **Transcribe**. The page is segmented into individual lines; only line crops reach TrOCR.
 6. Compare source-line overlays with the editable text and review uncertain passages.
 7. Save and reopen the SQLite project; export corrected or original machine text.
 
 No manuscript is uploaded. Network access occurs only when the user starts model installation. The
-checkpoint is [dh-unibe/trocr-kurrent](https://huggingface.co/dh-unibe/trocr-kurrent), pinned to commit
-`2882072ac68f7aa09353a71092ebd5510f4b82cd`; ordinary recognition then forces local-only loading.
+default checkpoint is [dh-unibe/trocr-kurrent](https://huggingface.co/dh-unibe/trocr-kurrent), pinned
+to commit `2882072ac68f7aa09353a71092ebd5510f4b82cd`; ordinary recognition then forces local-only
+loading. Bern's newer broad 16th–19th-century checkpoint is available as an experimental comparison,
+not as a claimed accuracy upgrade.
 
 ## Current functionality
 
@@ -39,8 +41,11 @@ checkpoint is [dh-unibe/trocr-kurrent](https://huggingface.co/dh-unibe/trocr-kur
 - Native two-panel Qt review UI, background transcription, cancellation, autosave, line overlays, manual
   correction and verification.
 - Schema-versioned SQLite projects preserving immutable machine output separately from edited text.
+- A pinned model selector that prevents outputs from different checkpoints being mixed in one project;
+  model changes require an automatic backup and clean retranscription.
 - UTF-8 text, Word, formula-safe CSV, and provenance-rich JSON exports.
-- CER/WER evaluation utility and unit tests; Windows build/installer workflow.
+- CER/WER evaluation of human-verified project lines, plus confidence-band diagnostics; Windows
+  build/installer workflow.
 
 The included OpenCV segmenter is a packageable fallback for predominantly horizontal pages. It detects
 line centres independently so descenders and flourishes do not create multi-line blocks, and can keep
@@ -73,10 +78,10 @@ If you use KurrentScholar in research, cite the exact software release. Publicat
 
 ### Citing the underlying recognition model
 
-KurrentScholar uses the independently developed University of Bern TrOCR Kurrent model by Jonas Widmer
-and Tobias Hodel in conjunction with the researchers and institutions acknowledged in its model card.
-KurrentScholar did not develop or train it. Cite the [model repository](https://huggingface.co/dh-unibe/trocr-kurrent)
-and [model DOI](https://doi.org/10.57967/hf/0442) separately.
+KurrentScholar uses independently developed TrOCR Kurrent models from Digital Humanities at the
+University of Bern and its collaborators. KurrentScholar did not develop or train them. Cite the exact
+model recorded in the project/export. The original model has a separate
+[model DOI](https://doi.org/10.57967/hf/0442).
 
 The upstream model card reports line-level results on its own nineteenth-century data and warns that the
 model has not been extensively tested. Those figures must not be generalized to other scripts, periods,

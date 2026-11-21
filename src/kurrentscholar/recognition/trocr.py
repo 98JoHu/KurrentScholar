@@ -87,9 +87,14 @@ def configure_cpu_runtime(torch_module: Any) -> CpuRuntimeConfiguration:
 
 
 class TrOCRBackend:
-    backend_id = "dh-unibe/trocr-kurrent"
-
-    def __init__(self, model_path: str | Path, device: str = "cpu", max_new_tokens: int = 127) -> None:
+    def __init__(
+        self,
+        model_path: str | Path,
+        device: str = "cpu",
+        max_new_tokens: int = 127,
+        model_id: str = "local-trocr",
+    ) -> None:
+        self.backend_id = model_id
         self.model_path = Path(model_path)
         self.device = device
         self.max_new_tokens = max_new_tokens
@@ -115,7 +120,10 @@ class TrOCRBackend:
             )
         LOGGER.info("Loading TrOCR processor from %s", self.model_path)
         self._processor = TrOCRProcessor.from_pretrained(
-            self.model_path, local_files_only=True, trust_remote_code=False
+            self.model_path,
+            local_files_only=True,
+            trust_remote_code=False,
+            use_fast=False,
         )
         LOGGER.info("TrOCR processor loaded; loading model weights on %s", self.device)
         self._model = VisionEncoderDecoderModel.from_pretrained(

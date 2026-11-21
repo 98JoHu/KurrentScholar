@@ -13,6 +13,15 @@ A page with no detected lines is marked as a segmentation failure;
 this is not evidence that the page is blank. Edits are stored separately from the original machine output.
 Mark a line verified only after comparison with the manuscript.
 
+Use **Recognition model** to inspect or change the checkpoint assigned to a project. Existing projects
+retain their recorded checkpoint. Changing a processed project first creates a separate backup and then
+clears derived line results, because outputs from two models must not be mixed. Install the desired pinned
+model with **Install model** before selecting it.
+
+After correcting a representative sample, mark each completed line verified and choose **Evaluate
+corrections**. The report gives CER, WER, exact-line rate, and results by model-score band. With no verified
+lines, KurrentScholar correctly refuses to claim an accuracy figure.
+
 Choose **Re-segment** after a line-detector update or when you deliberately want to replace all current
 boxes and OCR output. KurrentScholar first creates a timestamped `.ksproj` backup beside the open project.
 Corrections and review decisions remain available in that backup but are not automatically transferable

@@ -7,6 +7,7 @@ include installed license texts, and review transitive/native components.
 | Component | Purpose | License/source |
 |---|---|---|
 | TrOCR Kurrent (`dh-unibe/trocr-kurrent`) | Handwriting recognition checkpoint | MIT; University of Bern model card; DOI 10.57967/hf/0442 |
+| Broad Kurrent (`dh-unibe/trocr-german-kurrent-xvi-xix-from-kurrent-v2`) | Experimental comparison checkpoint | MIT; Digital Humanities, University of Bern model card |
 | PySide6 / Qt 6 | Desktop UI | LGPL-3.0/GPL/commercial depending component; packaged builds must preserve LGPL notices and relinking rights |
 | PyTorch | Local tensor inference | BSD-3-Clause |
 | Transformers, Hugging Face Hub, safetensors | Model loading/download | Apache-2.0 |

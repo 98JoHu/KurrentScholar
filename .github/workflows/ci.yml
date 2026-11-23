@@ -10,8 +10,11 @@ permissions:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        # Test the operating systems KurrentScholar actually distributes for.
+        # macOS application signing is intentionally confined to the release workflow.
+        os: [windows-latest, macos-15]
         python: ["3.11"]
     runs-on: ${{ matrix.os }}
     env:

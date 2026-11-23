@@ -23,7 +23,6 @@ hiddenimports = [
     "transformers.models.trocr",
     "transformers.models.vit",
     "transformers.models.roberta",
-    "transformers.models.llama",
     "openpyxl",
     "pypdfium2._helpers",
 ] + collect_submodules("huggingface_hub")
@@ -34,7 +33,7 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    runtime_hooks=[str(root / "packaging" / "windows" / "runtime_hook.py")],
+    runtime_hooks=[str(root / "packaging" / "runtime_hook.py")],
     # PyTorch imports both torch.distributed and torch.testing during ordinary
     # local CPU inference, so neither namespace may be excluded here.
     excludes=["tkinter", "matplotlib", "IPython", "notebook"],

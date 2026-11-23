@@ -8,13 +8,23 @@ from pathlib import Path
 from statistics import median
 
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import QObject, QRectF, QSettings, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence, QPen, QPixmap
+from PySide6.QtCore import QObject, QPointF, QRectF, QSettings, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import (
+    QAction,
+    QBrush,
+    QColor,
+    QKeySequence,
+    QPen,
+    QPixmap,
+    QPolygonF,
+    QTextCharFormat,
+    QTextCursor,
+    QTextFormat,
+)
 from PySide6.QtWidgets import (
-    QDockWidget,
     QFileDialog,
     QGraphicsPixmapItem,
-    QGraphicsRectItem,
+    QGraphicsPolygonItem,
     QGraphicsScene,
     QGraphicsView,
     QHBoxLayout,
@@ -23,10 +33,10 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressDialog,
     QPushButton,
-    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTextEdit,
@@ -62,12 +72,26 @@ from kurrentscholar.recognition import ModelManager, TrOCRBackend
 from kurrentscholar.segmentation import ProjectionSegmenter
 from kurrentscholar.ui.dialogs import (
     GroundTruthDialog,
-    LocalHelpPanel,
     ModelManagerDialog,
     TutorialOverlay,
 )
 
 LOGGER = logging.getLogger(f"{APP_NAME}.ui")
+
+TAG_PROPERTY = QTextFormat.UserProperty + 1
+TAG_COLOR_PROPERTY = QTextFormat.UserProperty + 2
+HIGHLIGHT_PROPERTY = QTextFormat.UserProperty + 3
+TAG_COLORS = {
+    "Person": "#F2C7C3",
+    "Place": "#C9DDF7",
+    "Organization": "#DDD0F2",
+    "Date": "#CDE8D2",
+    "Unclear": "#FFE7A8",
+}
+SPECIAL_CHARACTERS = (
+    "ä", "ö", "ü", "Ä", "Ö", "Ü", "ß", "ẞ", "ſ", "æ", "Æ", "œ", "Œ",
+    "§", "¶", "†", "‡", "°", "№", "½", "¼", "¾", "–", "—", "…",
+)
 
 
 class LineListWidget(QListWidget):
@@ -191,8 +215,15 @@ class ProcessingWorker(QObject):
                             )
                     status = "segmented" if lines else "segmentation_failed"
                     error = None if lines else "No handwriting lines were detected; review this page manually."
-                    project.upsert_page(page_index + 1, rendered.image.width, rendered.image.height,
-                                        self.dpi, status=status, error=error)
+                    project.upsert_page(
+                        page_index + 1,
+                        rendered.image.width,
+                        rendered.image.height,
+                        self.dpi,
+                        deskew_angle=segmenter.last_deskew_angle,
+                        status=status,
+                        error=error,
+                    )
                     existing = {
                         line.reading_order: line for line in project.lines(page_index + 1)
                     }
@@ -210,7 +241,9 @@ class ProcessingWorker(QObject):
                         self.progress.emit(position - 1, total,
                                            f"Page {page_index + 1}: line {line_number + 1}/{len(lines)}")
                         box = detected.bbox
-                        crop = rendered.image.crop((box.x, box.y, box.right, box.bottom))
+                        crop = detected.crop or rendered.image.crop(
+                            (box.x, box.y, box.right, box.bottom)
+                        )
                         try:
                             LOGGER.info(
                                 "Recognizing page %s line %s", page_index + 1, line_number + 1
@@ -220,6 +253,7 @@ class ProcessingWorker(QObject):
                                 page_index + 1, detected.reading_order, box, result.text,
                                 result.line_confidence, result.token_probabilities,
                                 result.token_ids, result.truncated,
+                                polygon=list(detected.polygon),
                             )
                         except Exception as error:  # keep failed regions visible
                             LOGGER.error(
@@ -230,7 +264,7 @@ class ProcessingWorker(QObject):
                             )
                             line_id = project.add_line(
                                 page_index + 1, detected.reading_order, box, "", None, [], [],
-                                recognition_error=str(error),
+                                recognition_error=str(error), polygon=list(detected.polygon),
                             )
                         self.line_saved.emit(page_index + 1, line_id)
                     self.progress.emit(position, total, f"Saved page {page_index + 1}")
@@ -281,6 +315,7 @@ class MainWindow(QMainWindow):
         self.current_page = 1
         self.current_line_id: int | None = None
         self.current_line_text: str | None = None
+        self.current_line_annotations: list[dict[str, object]] = []
         self.thresholds = ConfidenceThresholds()
         self._thread: QThread | None = None
         self._worker: ProcessingWorker | None = None
@@ -291,8 +326,6 @@ class MainWindow(QMainWindow):
         self._install_progress_timer: QTimer | None = None
         self._install_phase = "idle"
         self._model_manager_dialog: ModelManagerDialog | None = None
-        self._help_dialog: LocalHelpPanel | None = None
-        self._helper_dock: QDockWidget | None = None
         self._tutorial_overlay: TutorialOverlay | None = None
         self._tutorial_targets: dict[str, QWidget] = {}
         self._last_resegmentation_backup: Path | None = None
@@ -305,7 +338,7 @@ class MainWindow(QMainWindow):
         self._hovered_line_id: int | None = None
         self.autosave_enabled = QSettings().value("editor/autosave", True, type=bool)
         self.actions: dict[str, QAction] = {}
-        self._overlays: list[QGraphicsRectItem] = []
+        self._overlays: list[QGraphicsPolygonItem] = []
         self._build_ui()
         self._build_actions()
         self._apply_style()
@@ -329,7 +362,62 @@ class MainWindow(QMainWindow):
         self.editor = QTextEdit()
         self.editor.setObjectName("transcriptionEditor")
         self.editor.setPlaceholderText("Select a line to review or correct its transcription.")
+        self.editor.setEnabled(False)
+        font = self.editor.font()
+        font.setPointSize(QSettings().value("editor/font_size", 12, type=int))
+        self.editor.setFont(font)
         self.editor.textChanged.connect(self._schedule_autosave)
+        self.superscript_button = QPushButton("x²")
+        self.superscript_button.setCheckable(True)
+        self.superscript_button.setToolTip("Superscript (Ctrl+Shift+=)")
+        self.superscript_button.clicked.connect(lambda: self._toggle_vertical_format("superscript"))
+        self.subscript_button = QPushButton("x₂")
+        self.subscript_button.setCheckable(True)
+        self.subscript_button.setToolTip("Subscript (Ctrl+=)")
+        self.subscript_button.clicked.connect(lambda: self._toggle_vertical_format("subscript"))
+        highlight = QPushButton("Highlight")
+        highlight.setToolTip("Highlight the selected text")
+        highlight.clicked.connect(self._highlight_selection)
+        tag = QPushButton("Tag…")
+        tag.setToolTip("Apply a named, colored tag to the selected word or text")
+        tag.clicked.connect(self._tag_selection)
+        clear_format = QPushButton("Clear format")
+        clear_format.setToolTip("Remove highlighting, tags, superscript and subscript")
+        clear_format.clicked.connect(self._clear_selection_format)
+        special = QToolButton()
+        special.setText("Special character")
+        special.setPopupMode(QToolButton.InstantPopup)
+        special_menu = QMenu(special)
+        for character in SPECIAL_CHARACTERS:
+            special_menu.addAction(
+                character,
+                lambda _checked=False, value=character: self._insert_character(value),
+            )
+        special.setMenu(special_menu)
+        self.font_size = QSpinBox()
+        self.font_size.setRange(8, 28)
+        self.font_size.setValue(self.editor.font().pointSize())
+        self.font_size.setPrefix("Text ")
+        self.font_size.setSuffix(" pt")
+        self.font_size.setToolTip("Change the transcription editor text size")
+        self.font_size.valueChanged.connect(self._set_editor_font_size)
+        format_row = QHBoxLayout()
+        for control in (
+            self.superscript_button,
+            self.subscript_button,
+            highlight,
+            tag,
+            clear_format,
+            special,
+            self.font_size,
+        ):
+            format_row.addWidget(control)
+        format_row.addStretch(1)
+        editor_panel = QWidget()
+        editor_layout = QVBoxLayout(editor_panel)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.addLayout(format_row)
+        editor_layout.addWidget(self.editor)
         self.status_label = QLabel()
         self.status_label.setObjectName("contextStatus")
         self.status_label.setWordWrap(True)
@@ -341,8 +429,13 @@ class MainWindow(QMainWindow):
         right.setObjectName("reviewCard")
         right_layout = QVBoxLayout(right)
         right_layout.addWidget(self.status_label)
-        right_layout.addWidget(self.line_list, 2)
-        right_layout.addWidget(self.editor, 1)
+        self.review_splitter = QSplitter(Qt.Vertical)
+        self.review_splitter.setObjectName("reviewSplitter")
+        self.review_splitter.setChildrenCollapsible(False)
+        self.review_splitter.addWidget(self.line_list)
+        self.review_splitter.addWidget(editor_panel)
+        self.review_splitter.setSizes([430, 250])
+        right_layout.addWidget(self.review_splitter, 1)
         buttons = QHBoxLayout()
         buttons.addWidget(verify)
         buttons.addWidget(next_uncertain)
@@ -373,8 +466,6 @@ class MainWindow(QMainWindow):
             QToolButton:hover, QPushButton:hover { background: #E7D7D5; }
             QToolButton:pressed, QPushButton:pressed { background: #D9C2BF; }
             QToolButton:disabled, QPushButton:disabled { background: #EEF0F3; color: #9AA2AB; border-color: #E1E5E9; }
-            QToolButton#helperLauncher { background: #9A6F6B; color: #FFFFFF; border: 0; border-radius: 16px; padding: 8px 14px; }
-            QToolButton#helperLauncher:hover, QToolButton#helperLauncher:checked { background: #795451; }
             QGraphicsView, QListWidget, QTextEdit, QTextBrowser, QTableWidget, QLineEdit { background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 12px; selection-background-color: #DCC8C5; selection-color: #20252B; }
             QGraphicsView { margin: 8px 4px 8px 8px; }
             QWidget#reviewCard { background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 18px; }
@@ -384,18 +475,6 @@ class MainWindow(QMainWindow):
             QLabel#tutorialKicker { color: #9A6F6B; font-size: 11px; font-weight: 800; }
             QLabel#tutorialBody { color: #4F5B66; font-size: 14px; }
             QLabel#tutorialProgress { color: #7A858F; font-weight: 600; }
-            QDockWidget#helperDock { background: #FFFFFF; border-left: 1px solid #DDE3EA; }
-            QWidget#helperPanel { background: #FFFFFF; }
-            QLabel#helperAvatar { background: #9A6F6B; color: #FFFFFF; border-radius: 18px; min-width: 36px; min-height: 36px; max-width: 36px; max-height: 36px; font-size: 18px; font-weight: 800; }
-            QLabel#helperTitle { color: #313840; font-size: 17px; font-weight: 750; }
-            QLabel#helperSubtitle, QLabel#helperNotice { color: #75808B; font-size: 11px; }
-            QPushButton#helperHeaderButton { background: transparent; border: 0; color: #5E6872; font-size: 21px; padding: 3px 7px; }
-            QPushButton#helperHeaderButton:hover { background: #F0E7E6; }
-            QScrollArea#helperMessages, QWidget#helperMessageHost { background: #F7F8FA; border: 0; border-radius: 14px; }
-            QLabel#helperBotMessage { background: #9A6F6B; color: #FFFFFF; border-radius: 13px; padding: 10px 12px; }
-            QLabel#helperUserMessage { background: #F0E7E6; color: #3F3433; border: 1px solid #DECBC9; border-radius: 13px; padding: 10px 12px; }
-            QLineEdit#helperInput { padding: 9px 11px; border-radius: 15px; }
-            QPushButton#helperSend { background: #9A6F6B; color: #FFFFFF; border: 0; border-radius: 14px; }
             QSpinBox { background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 9px; padding: 6px 8px; min-width: 112px; }
             QProgressDialog { background: #F4F7FB; }
             QHeaderView::section { background: #F0E7E6; color: #5E3F3C; padding: 7px; border: 0; border-right: 1px solid #DECBC9; font-weight: 600; }
@@ -450,17 +529,17 @@ class MainWindow(QMainWindow):
             ),
             (
                 "Export your work",
-                "Export is a dedicated menu and toolbar control. Choose plain text, Word, CSV, "
+                "Use the dedicated Export menu. Choose plain text, Word, CSV, "
                 "Excel, or research JSON; verified line crops for external fine-tuning are available "
                 "there as a separate ground-truth bundle.",
                 self._tutorial_targets.get("export"),
             ),
             (
-                "Ask KurrentBot",
-                "Open the local helper from the upper right whenever you need guidance. Its "
-                "conversation stays beside the workspace, and it does not need manuscript text. "
-                "You can replay this tour later from Help > Tutorial.",
-                self._tutorial_targets.get("helper"),
+                "Correct and annotate",
+                "Drag the divider below the line list to resize the editor. Its formatting controls "
+                "support superscript, subscript, highlights, named tags, and historical special "
+                "characters. You can replay this tour later from Help > Tutorial.",
+                self._tutorial_targets.get("review"),
             ),
         ]
         overlay = TutorialOverlay(steps, self)
@@ -513,7 +592,6 @@ class MainWindow(QMainWindow):
         zoom_out = action("Zoom out", lambda: self.viewer.scale(1 / 1.2, 1 / 1.2), QKeySequence.ZoomOut)
         zoom_fit = action("Fit page", lambda: self.viewer.fitInView(self.pixmap_item, Qt.KeepAspectRatio))
         tutorial = action("Tutorial", self.show_tutorial)
-        local_help = action("Ask KurrentBot", self.show_local_help)
         diagnostic = action("Diagnostic log", self.show_diagnostic_log)
         about = action("About", self.about)
 
@@ -531,6 +609,7 @@ class MainWindow(QMainWindow):
             export_menu.addAction(action(f"Export {label}", lambda _checked=False, s=suffix: self.export_project(s)))
         export_menu.addSeparator()
         export_menu.addAction(ground_truth)
+        self._tutorial_targets["export"] = self.menuBar()
 
         transcription_menu = self.menuBar().addMenu("&Transcription")
         transcription_menu.addActions([current, page_range, all_pages])
@@ -541,6 +620,24 @@ class MainWindow(QMainWindow):
         review_menu.addActions([save, autosave])
         review_menu.addSeparator()
         review_menu.addActions([verify, uncertain, evaluate])
+        formatting_menu = review_menu.addMenu("Text formatting")
+        formatting_menu.addAction(
+            action(
+                "Superscript",
+                lambda: self._toggle_vertical_format("superscript"),
+                "Ctrl+Shift+=",
+            )
+        )
+        formatting_menu.addAction(
+            action(
+                "Subscript",
+                lambda: self._toggle_vertical_format("subscript"),
+                "Ctrl+=",
+            )
+        )
+        formatting_menu.addAction(
+            action("Clear text formatting", self._clear_selection_format, "Ctrl+Space")
+        )
 
         models_menu = self.menuBar().addMenu("&Models")
         models_menu.addActions([manage_models, select_model])
@@ -551,7 +648,7 @@ class MainWindow(QMainWindow):
         view_menu.addActions([zoom_in, zoom_out, zoom_fit])
 
         help_menu = self.menuBar().addMenu("&Help")
-        help_menu.addActions([tutorial, local_help, diagnostic])
+        help_menu.addActions([tutorial, diagnostic])
         help_menu.addSeparator()
         help_menu.addAction(about)
 
@@ -584,55 +681,7 @@ class MainWindow(QMainWindow):
         transcribe_button.setMenu(transcription_menu)
         toolbar.addWidget(transcribe_button)
         self._tutorial_targets["transcribe"] = transcribe_button
-        toolbar.addAction(save)
-        export_button = QToolButton()
-        export_button.setText("Export")
-        export_button.setToolTip("Choose an export format")
-        export_button.setPopupMode(QToolButton.InstantPopup)
-        export_button.setMenu(export_menu)
-        toolbar.addWidget(export_button)
-        self._tutorial_targets["export"] = export_button
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        toolbar.addWidget(spacer)
-        helper_button = QToolButton()
-        helper_button.setObjectName("helperLauncher")
-        helper_button.setText("?  Ask KurrentBot")
-        helper_button.setToolTip("Open the local KurrentScholar helper")
-        helper_button.setCheckable(True)
-        helper_button.clicked.connect(self.show_local_help)
-        toolbar.addWidget(helper_button)
-        self.helper_button = helper_button
-        self._tutorial_targets["helper"] = helper_button
-        self._build_helper_dock()
         self._update_navigation_actions()
-
-    def _build_helper_dock(self) -> None:
-        panel = LocalHelpPanel(self)
-        panel.install_requested.connect(self._install_selected_model)
-        dock = QDockWidget("KurrentBot", self)
-        dock.setObjectName("helperDock")
-        dock.setAllowedAreas(Qt.RightDockWidgetArea)
-        dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
-        dock.setTitleBarWidget(QWidget())
-        dock.setWidget(panel)
-        dock.setMinimumWidth(370)
-        dock.hide()
-        panel.close_requested.connect(dock.hide)
-        dock.visibilityChanged.connect(self._helper_visibility_changed)
-        self.addDockWidget(Qt.RightDockWidgetArea, dock)
-        self._help_dialog = panel
-        self._helper_dock = dock
-
-    @Slot(bool)
-    def _helper_visibility_changed(self, visible: bool) -> None:
-        if hasattr(self, "helper_button"):
-            self.helper_button.blockSignals(True)
-            self.helper_button.setChecked(visible)
-            self.helper_button.blockSignals(False)
-        if visible and self._help_dialog:
-            self._help_dialog.refresh()
-            self._help_dialog.question.setFocus()
 
     def _update_navigation_actions(self) -> None:
         document = self.project.document() if self.project else None
@@ -869,6 +918,7 @@ class MainWindow(QMainWindow):
         self._edit_timer.stop()
         self.current_line_id = None
         self.current_line_text = None
+        self.current_line_annotations = []
         self._hovered_line_id = None
         self.line_list.clear()
         for overlay in self._overlays:
@@ -890,16 +940,23 @@ class MainWindow(QMainWindow):
                 if line.id == selected_id:
                     selected_row = self.line_list.count() - 1
                 box = line.bbox
-                rect = QGraphicsRectItem(
-                    box.x * self._display_scale_x,
-                    box.y * self._display_scale_y,
-                    box.width * self._display_scale_x,
-                    box.height * self._display_scale_y,
+                points = line.polygon or [
+                    (box.x, box.y),
+                    (box.right, box.y),
+                    (box.right, box.bottom),
+                    (box.x, box.bottom),
+                ]
+                polygon = QPolygonF(
+                    [
+                        QPointF(x * self._display_scale_x, y * self._display_scale_y)
+                        for x, y in points
+                    ]
                 )
-                rect.setPen(QPen(QColor("#9A6F6B"), 2))
-                rect.setData(0, line.id)
-                self.scene.addItem(rect)
-                self._overlays.append(rect)
+                overlay = QGraphicsPolygonItem(polygon)
+                overlay.setPen(QPen(QColor("#9A6F6B"), 2))
+                overlay.setData(0, line.id)
+                self.scene.addItem(overlay)
+                self._overlays.append(overlay)
         self.line_list.blockSignals(False)
         if selected_row >= 0:
             self.line_list.setCurrentRow(selected_row)
@@ -907,6 +964,7 @@ class MainWindow(QMainWindow):
             self.editor.blockSignals(True)
             self.editor.clear()
             self.editor.blockSignals(False)
+            self.editor.setEnabled(False)
             self._update_overlay_highlights()
 
     def _project_model_spec(self) -> ModelSpec:
@@ -1325,8 +1383,6 @@ class MainWindow(QMainWindow):
             return
         if self._model_manager_dialog:
             self._model_manager_dialog.refresh()
-        if self._help_dialog:
-            self._help_dialog.refresh()
         self.statusBar().showMessage(f"Removed {spec.display_name}.", 7_000)
 
     @Slot(object)
@@ -1366,18 +1422,6 @@ class MainWindow(QMainWindow):
         if self._model_manager_dialog:
             self._model_manager_dialog.project_model = selected
             self._model_manager_dialog.refresh()
-
-    @Slot()
-    def show_local_help(self) -> None:
-        if not self._helper_dock or not self._help_dialog:
-            return
-        if self._helper_dock.isVisible():
-            self._helper_dock.hide()
-        else:
-            self._help_dialog.refresh()
-            self._helper_dock.show()
-            self._helper_dock.raise_()
-            self.resizeDocks([self._helper_dock], [390], Qt.Horizontal)
 
     def _start_model_installation(self) -> None:
         if self._install_thread and self._install_thread.isRunning():
@@ -1448,8 +1492,6 @@ class MainWindow(QMainWindow):
         self.actions["Install model"].setEnabled(True)
         if self._model_manager_dialog:
             self._model_manager_dialog.refresh()
-        if self._help_dialog:
-            self._help_dialog.refresh()
         self.status_label.setText(f"{self.model_manager.spec.display_name} installed and ready offline.")
         QMessageBox.information(
             self,
@@ -1468,8 +1510,6 @@ class MainWindow(QMainWindow):
         self.actions["Install model"].setEnabled(True)
         if self._model_manager_dialog:
             self._model_manager_dialog.refresh()
-        if self._help_dialog:
-            self._help_dialog.refresh()
         LOGGER.error("Model installation failed: %s\n%s", message, details)
         self._error(
             "The model installation did not finish",
@@ -1504,6 +1544,189 @@ class MainWindow(QMainWindow):
             "Completed data is reused after interruptions."
         )
 
+    def _format_cursor(self, select_word: bool = False) -> QTextCursor | None:
+        if not self.editor.isEnabled():
+            return None
+        cursor = self.editor.textCursor()
+        if select_word and not cursor.hasSelection():
+            cursor.select(QTextCursor.WordUnderCursor)
+        return cursor
+
+    def _toggle_vertical_format(self, kind: str) -> None:
+        cursor = self._format_cursor()
+        if cursor is None:
+            return
+        target = (
+            QTextCharFormat.VerticalAlignment.AlignSuperScript
+            if kind == "superscript"
+            else QTextCharFormat.VerticalAlignment.AlignSubScript
+        )
+        current = cursor.charFormat().verticalAlignment()
+        alignment = (
+            QTextCharFormat.VerticalAlignment.AlignNormal if current == target else target
+        )
+        formatting = QTextCharFormat()
+        formatting.setVerticalAlignment(alignment)
+        if cursor.hasSelection():
+            cursor.mergeCharFormat(formatting)
+        else:
+            self.editor.mergeCurrentCharFormat(formatting)
+        self.superscript_button.setChecked(
+            alignment == QTextCharFormat.VerticalAlignment.AlignSuperScript
+        )
+        self.subscript_button.setChecked(
+            alignment == QTextCharFormat.VerticalAlignment.AlignSubScript
+        )
+        self._schedule_autosave()
+
+    def _highlight_selection(self) -> None:
+        cursor = self._format_cursor(select_word=True)
+        if cursor is None or not cursor.hasSelection():
+            self.statusBar().showMessage("Select text, or place the cursor inside a word, first.", 4_000)
+            return
+        color = "#FFF0A8"
+        formatting = QTextCharFormat()
+        formatting.setBackground(QColor(color))
+        formatting.setProperty(HIGHLIGHT_PROPERTY, color)
+        cursor.mergeCharFormat(formatting)
+        self._schedule_autosave()
+
+    def _tag_selection(self) -> None:
+        cursor = self._format_cursor(select_word=True)
+        if cursor is None or not cursor.hasSelection():
+            self.statusBar().showMessage("Select text, or place the cursor inside a word, first.", 4_000)
+            return
+        choices = [*TAG_COLORS, "Custom…"]
+        label, accepted = QInputDialog.getItem(
+            self, "Tag selected text", "Tag:", choices, 0, False
+        )
+        if not accepted:
+            return
+        if label == "Custom…":
+            label, accepted = QInputDialog.getText(self, "Custom tag", "Tag name:")
+            label = label.strip()
+            if not accepted or not label:
+                return
+        palette = tuple(TAG_COLORS.values())
+        color = TAG_COLORS.get(label, palette[sum(map(ord, label)) % len(palette)])
+        formatting = QTextCharFormat()
+        formatting.setBackground(QColor(color))
+        formatting.setProperty(TAG_PROPERTY, label)
+        formatting.setProperty(TAG_COLOR_PROPERTY, color)
+        cursor.mergeCharFormat(formatting)
+        self._schedule_autosave()
+
+    def _clear_selection_format(self) -> None:
+        cursor = self._format_cursor(select_word=True)
+        if cursor is None or not cursor.hasSelection():
+            return
+        formatting = QTextCharFormat()
+        formatting.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignNormal)
+        formatting.clearBackground()
+        formatting.clearProperty(TAG_PROPERTY)
+        formatting.clearProperty(TAG_COLOR_PROPERTY)
+        formatting.clearProperty(HIGHLIGHT_PROPERTY)
+        cursor.mergeCharFormat(formatting)
+        self.superscript_button.setChecked(False)
+        self.subscript_button.setChecked(False)
+        self._schedule_autosave()
+
+    def _insert_character(self, character: str) -> None:
+        cursor = self._format_cursor()
+        if cursor is None:
+            return
+        cursor.insertText(character)
+        self.editor.setTextCursor(cursor)
+        self.editor.ensureCursorVisible()
+
+    @Slot(int)
+    def _set_editor_font_size(self, point_size: int) -> None:
+        font = self.editor.font()
+        font.setPointSize(point_size)
+        self.editor.setFont(font)
+        QSettings().setValue("editor/font_size", point_size)
+
+    def _collect_annotations(self) -> list[dict[str, object]]:
+        annotations: list[dict[str, object]] = []
+        block = self.editor.document().begin()
+        while block.isValid():
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                iterator += 1
+                if not fragment.isValid() or not fragment.text():
+                    continue
+                start = fragment.position()
+                end = start + fragment.length()
+                formatting = fragment.charFormat()
+                vertical = formatting.verticalAlignment()
+                if vertical == QTextCharFormat.VerticalAlignment.AlignSuperScript:
+                    annotations.append({"start": start, "end": end, "kind": "superscript"})
+                elif vertical == QTextCharFormat.VerticalAlignment.AlignSubScript:
+                    annotations.append({"start": start, "end": end, "kind": "subscript"})
+                if formatting.hasProperty(TAG_PROPERTY):
+                    annotations.append({
+                        "start": start,
+                        "end": end,
+                        "kind": "tag",
+                        "label": str(formatting.property(TAG_PROPERTY)),
+                        "color": str(formatting.property(TAG_COLOR_PROPERTY) or "#FFF0A8"),
+                    })
+                elif formatting.hasProperty(HIGHLIGHT_PROPERTY):
+                    annotations.append({
+                        "start": start,
+                        "end": end,
+                        "kind": "highlight",
+                        "color": str(formatting.property(HIGHLIGHT_PROPERTY) or "#FFF0A8"),
+                    })
+            block = block.next()
+
+        merged: list[dict[str, object]] = []
+        for annotation in annotations:
+            identity = {key: value for key, value in annotation.items() if key not in {"start", "end"}}
+            if (
+                merged
+                and merged[-1]["end"] == annotation["start"]
+                and {key: value for key, value in merged[-1].items() if key not in {"start", "end"}}
+                == identity
+            ):
+                merged[-1]["end"] = annotation["end"]
+            else:
+                merged.append(dict(annotation))
+        return merged
+
+    def _apply_annotations(self, annotations: list[dict[str, object]]) -> None:
+        length = len(self.editor.toPlainText())
+        for annotation in annotations:
+            try:
+                start = max(0, min(length, int(annotation["start"])))
+                end = max(start, min(length, int(annotation["end"])))
+                kind = str(annotation["kind"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start == end:
+                continue
+            cursor = self.editor.textCursor()
+            cursor.setPosition(start)
+            cursor.setPosition(end, QTextCursor.KeepAnchor)
+            formatting = QTextCharFormat()
+            if kind == "superscript":
+                formatting.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignSuperScript)
+            elif kind == "subscript":
+                formatting.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignSubScript)
+            elif kind == "tag":
+                color = str(annotation.get("color", "#FFF0A8"))
+                formatting.setBackground(QColor(color))
+                formatting.setProperty(TAG_PROPERTY, str(annotation.get("label", "Tag")))
+                formatting.setProperty(TAG_COLOR_PROPERTY, color)
+            elif kind == "highlight":
+                color = str(annotation.get("color", "#FFF0A8"))
+                formatting.setBackground(QColor(color))
+                formatting.setProperty(HIGHLIGHT_PROPERTY, color)
+            else:
+                continue
+            cursor.mergeCharFormat(formatting)
+
     def _select_line(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
         if current is None or not self.project:
             return
@@ -1511,9 +1734,14 @@ class MainWindow(QMainWindow):
         self.current_line_id = int(current.data(Qt.UserRole))
         line = next(item for item in self.project.lines(self.current_page) if item.id == self.current_line_id)
         self.current_line_text = line.display_text
+        self.current_line_annotations = line.annotations
         self.editor.blockSignals(True)
         self.editor.setPlainText(line.display_text)
+        self._apply_annotations(line.annotations)
+        self.editor.setEnabled(True)
         self.editor.blockSignals(False)
+        self.superscript_button.setChecked(False)
+        self.subscript_button.setChecked(False)
         self._update_overlay_highlights()
 
     @Slot(object)
@@ -1544,11 +1772,20 @@ class MainWindow(QMainWindow):
         if self.current_line_id is None or not self.project:
             return
         text = self.editor.toPlainText()
-        if text == self.current_line_text:
+        annotations = self._collect_annotations()
+        if text == self.current_line_text and annotations == self.current_line_annotations:
             return
-        if self.project.correct_line(self.current_line_id, text):
+        if self.project.correct_line(self.current_line_id, text, annotations):
             self.current_line_text = text
-            current = self.line_list.currentItem()
+            self.current_line_annotations = annotations
+            current = next(
+                (
+                    self.line_list.item(row)
+                    for row in range(self.line_list.count())
+                    if int(self.line_list.item(row).data(Qt.UserRole)) == self.current_line_id
+                ),
+                None,
+            )
             if current:
                 line = self.project.line(self.current_line_id)
                 label = self.thresholds.classify(line.confidence).value.replace("_", " ")
@@ -1723,14 +1960,6 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def closeEvent(self, event) -> None:
-        if self._help_dialog and self._help_dialog.busy:
-            QMessageBox.information(
-                self,
-                "Local helper is active",
-                "Wait for the current local answer to finish before closing KurrentScholar.",
-            )
-            event.ignore()
-            return
         if self._install_thread and self._install_thread.isRunning():
             QMessageBox.information(
                 self,

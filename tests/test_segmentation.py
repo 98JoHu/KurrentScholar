@@ -59,3 +59,20 @@ def test_paper_shadow_does_not_become_an_ink_block():
     assert len(lines) == 2
     assert all(line.bbox.y < 350 for line in lines)
 
+
+def test_slanted_page_is_deskewed_for_line_crops_and_keeps_rotated_overlays():
+    image = Image.new("RGB", (800, 500), "white")
+    draw = ImageDraw.Draw(image)
+    for y in (110, 220, 330):
+        draw.rectangle((90, y, 710, y + 18), fill="black")
+    slanted = image.rotate(4.0, resample=Image.Resampling.BICUBIC, fillcolor="white")
+
+    segmenter = ProjectionSegmenter(minimum_height=5)
+    lines = segmenter.detect_lines(slanted)
+
+    assert len(lines) == 3
+    assert abs(segmenter.last_deskew_angle) >= 3.0
+    assert all(line.crop is not None for line in lines)
+    assert all(len(line.polygon) == 4 for line in lines)
+    assert any(abs(line.polygon[0][1] - line.polygon[1][1]) > 10 for line in lines)
+

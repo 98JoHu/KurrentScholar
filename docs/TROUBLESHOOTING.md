@@ -17,7 +17,10 @@
   tables, damage, severe bleed-through, and crossed text. Use **Re-segment** after installing a detector
   update; the app backs up the old project before replacement. Keep problematic pages for manual review;
   no detected region is a verified blank.
-- **Recognition is poor:** verify that overlays contain one complete horizontal line. The model principally
+- **Recognition is poor:** verify that overlays contain one complete line. Pages tilted up to roughly 7°
+  are deskewed automatically for recognition while overlays remain aligned to the original scan. Mixed
+  local slopes, curved baselines, severe camera perspective, or warped bindings may still require image
+  straightening before import. The model principally
   targets nineteenth-century German Kurrent and may transfer poorly to other scripts/periods.
 - **PDF will not open:** encrypted, damaged, unusually large, or parser-hostile files are rejected. Work from
   an authorized archival image copy; never overwrite the original.

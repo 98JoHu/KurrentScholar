@@ -20,13 +20,15 @@ class ProjectionSegmenter:
     """
 
     backend_id = "opencv-projection-fallback"
-    version = "2"
+    version = "3"
 
     def __init__(self, minimum_height: int = 8, padding: int = 6) -> None:
         self.minimum_height = minimum_height
         self.padding = padding
+        self.last_deskew_angle = 0.0
 
     def detect_lines(self, image: Image.Image) -> list[DetectedLine]:
+        self.last_deskew_angle = 0.0
         gray = np.asarray(image.convert("L"))
         if gray.size == 0 or float(gray.std()) < 1.0:
             return []
@@ -43,6 +45,33 @@ class ProjectionSegmenter:
         analysis = binary.copy()
         self._clear_scan_edges(analysis)
 
+        self.last_deskew_angle = self._estimate_deskew_angle(analysis)
+        matrix: np.ndarray | None = None
+        deskewed_image = image.convert("RGB")
+        if self.last_deskew_angle:
+            centre = (width / 2.0, height / 2.0)
+            matrix = cv2.getRotationMatrix2D(centre, self.last_deskew_angle, 1.0)
+            analysis = cv2.warpAffine(
+                analysis,
+                matrix,
+                (width, height),
+                flags=cv2.INTER_NEAREST,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            )
+            self._clear_scan_edges(analysis)
+            rgb = np.asarray(deskewed_image)
+            deskewed_image = Image.fromarray(
+                cv2.warpAffine(
+                    rgb,
+                    matrix,
+                    (width, height),
+                    flags=cv2.INTER_CUBIC,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(255, 255, 255),
+                )
+            )
+
         profile = np.count_nonzero(analysis, axis=1).astype(np.float32)
         smooth_profile = self._smooth(profile, height)
         centres = self._line_centres(smooth_profile, width, height)
@@ -56,7 +85,99 @@ class ProjectionSegmenter:
 
         boxes = self._remove_implausibly_tall_boxes(boxes, height)
         boxes.sort(key=lambda box: (box.y + box.height // 2, box.x))
-        return [DetectedLine(box, order) for order, box in enumerate(boxes)]
+        inverse = cv2.invertAffineTransform(matrix) if matrix is not None else None
+        detected: list[DetectedLine] = []
+        for order, box in enumerate(boxes):
+            crop = deskewed_image.crop((box.x, box.y, box.right, box.bottom))
+            polygon = self._source_polygon(box, inverse, width, height)
+            source_box = self._polygon_bbox(polygon, width, height)
+            detected.append(DetectedLine(source_box, order, crop, polygon))
+        return detected
+
+    @classmethod
+    def _estimate_deskew_angle(cls, binary: np.ndarray) -> float:
+        """Return the small rotation that makes the page's baselines horizontal."""
+
+        height, width = binary.shape
+        scale = min(1.0, 1200.0 / max(height, width))
+        sample = (
+            cv2.resize(binary, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            if scale < 1.0
+            else binary
+        )
+        if np.count_nonzero(sample) < 100:
+            return 0.0
+
+        coarse = np.arange(-7.0, 7.01, 0.5)
+        scores = [cls._projection_score(sample, float(angle)) for angle in coarse]
+        best = float(coarse[int(np.argmax(scores))])
+        fine = np.arange(best - 0.5, best + 0.501, 0.1)
+        fine_scores = [cls._projection_score(sample, float(angle)) for angle in fine]
+        best = float(fine[int(np.argmax(fine_scores))])
+        zero_score = cls._projection_score(sample, 0.0)
+        best_score = max(fine_scores)
+        relative_gain = (best_score - zero_score) / max(zero_score, 1e-6)
+        if abs(best) < 0.25 or relative_gain < 0.025:
+            return 0.0
+        return round(best, 2)
+
+    @staticmethod
+    def _projection_score(binary: np.ndarray, angle: float) -> float:
+        height, width = binary.shape
+        matrix = cv2.getRotationMatrix2D((width / 2.0, height / 2.0), angle, 1.0)
+        rotated = cv2.warpAffine(
+            binary,
+            matrix,
+            (width, height),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        margin_y = max(1, round(height * 0.03))
+        margin_x = max(1, round(width * 0.03))
+        profile = np.count_nonzero(
+            rotated[margin_y : height - margin_y, margin_x : width - margin_x], axis=1
+        ).astype(np.float64)
+        total = float(profile.sum())
+        return float(np.square(profile).sum() / max(total, 1.0))
+
+    @staticmethod
+    def _source_polygon(
+        box: BoundingBox,
+        inverse: np.ndarray | None,
+        width: int,
+        height: int,
+    ) -> tuple[tuple[float, float], ...]:
+        points = np.array(
+            [
+                [box.x, box.y, 1.0],
+                [box.right, box.y, 1.0],
+                [box.right, box.bottom, 1.0],
+                [box.x, box.bottom, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        if inverse is not None:
+            points = points @ inverse.T
+        return tuple(
+            (
+                float(np.clip(x, 0, max(0, width - 1))),
+                float(np.clip(y, 0, max(0, height - 1))),
+            )
+            for x, y in points[:, :2]
+        )
+
+    @staticmethod
+    def _polygon_bbox(
+        polygon: tuple[tuple[float, float], ...], width: int, height: int
+    ) -> BoundingBox:
+        xs = [point[0] for point in polygon]
+        ys = [point[1] for point in polygon]
+        left = max(0, int(np.floor(min(xs))))
+        top = max(0, int(np.floor(min(ys))))
+        right = min(width, int(np.ceil(max(xs))))
+        bottom = min(height, int(np.ceil(max(ys))))
+        return BoundingBox(left, top, max(1, right - left), max(1, bottom - top))
 
     @staticmethod
     def _clear_scan_edges(binary: np.ndarray) -> None:
@@ -96,7 +217,19 @@ class ProjectionSegmenter:
         for start, end in cls._bands(candidates):
             local = profile[start:end]
             centres.append(start + int(np.argmax(local)))
-        return centres
+
+        # Antialiased or textured strokes can leave two nearby projection peaks
+        # within one physical line after deskewing. Consolidate only peaks much
+        # closer than normal line spacing, retaining the stronger centre.
+        consolidated: list[int] = []
+        minimum_separation = max(12, window * 2)
+        for centre in centres:
+            if consolidated and centre - consolidated[-1] < minimum_separation:
+                if profile[centre] > profile[consolidated[-1]]:
+                    consolidated[-1] = centre
+            else:
+                consolidated.append(centre)
+        return consolidated
 
     @staticmethod
     def _valley_boundaries(

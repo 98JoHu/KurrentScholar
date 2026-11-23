@@ -15,7 +15,7 @@
   <a href="CITATION.cff"><img alt="Cite this software" src="https://img.shields.io/badge/cite-CITATION.cff-0b0a06"></a>
 </p>
 
-KurrentScholar is an open-source Windows desktop application for turning scanned historical German
+KurrentScholar is an open-source Windows and macOS desktop application for turning scanned historical German
 Kurrent handwriting into editable, auditable text. It detects individual writing lines, runs open TrOCR
 models locally, presents source and transcription together for correction, and preserves model,
 segmentation, and verification provenance in a reusable project.
@@ -36,6 +36,16 @@ Recommended minimums are Windows 10 or 11 x64, 8 GB RAM, and roughly 3 GB free d
 application, one recognition model, and installation headroom. Recognition is CPU-only and adapts its
 thread count to the processors available to the application. A GPU is not required.
 
+## Download for macOS
+
+- **[Download for Apple Silicon (M1 or newer)](https://github.com/98JoHu/KurrentScholar/releases/latest/download/KurrentScholar-macOS-Apple-Silicon.dmg)**
+- **[Download for Intel Mac](https://github.com/98JoHu/KurrentScholar/releases/latest/download/KurrentScholar-macOS-Intel.dmg)**
+
+Native Mac downloads start with KurrentScholar 1.1.0 and require macOS 12 or newer. They are built on the
+matching processor architecture, signed with Apple Developer ID, notarized by Apple, and stapled before
+publication. If the matching DMG is absent from the latest GitHub Release, that release does not yet
+support macOS; do not use an unnotarized build from another source.
+
 ## First use
 
 1. Install and open KurrentScholar. The welcome tour introduces the actual controls.
@@ -52,19 +62,17 @@ offline.
 
 ## What is included
 
-- Adaptive line-oriented segmentation for predominantly horizontal Kurrent pages, with spatially
-  separated regions kept distinct.
+- Adaptive line-oriented segmentation with conservative page deskewing, horizontal OCR crops, and rotated
+  source-image overlays; spatially separated regions remain distinct.
 - Local TrOCR inference with pinned model revisions, safetensors integrity checks, beam-search confidence
   evidence, and CPU-safe defaults.
-- Live page-scoped transcription, cancellation, direct page navigation, synchronized overlays, editable
-  text, correction history, and human verification.
+- Live page-scoped transcription, cancellation, direct page navigation, synchronized polygon overlays,
+  a resizable editor, rich corrections and word tags, correction history, and human verification.
 - Default-on Auto Save and schema-versioned SQLite projects that preserve machine output separately from
   edited text.
 - A model manager showing installed, partial, or damaged models and disk use, with repair and safe removal.
 - UTF-8 text, Word, formula-safe CSV, standards-compliant Excel, and provenance-rich JSON exports.
 - Verified ground-truth bundles and CER/WER evaluation for responsible external adaptation workflows.
-- An optional Apache-2.0 local helper that answers navigation questions with curated in-app guidance and
-  does not need manuscript content.
 - Persistent application, crash, and responsiveness logs under
   `%LOCALAPPDATA%\KurrentScholar\Logs` for troubleshooting.
 
@@ -108,7 +116,7 @@ uv run ruff check .
 uv run pytest -m "not real_model"
 ```
 
-Windows packaging and clean-machine acceptance steps are documented in
+Windows and macOS packaging and clean-machine acceptance steps are documented in
 [Installation and build](docs/INSTALLATION.md) and [Publishing](docs/PUBLISHING.md).
 
 ## Citation
@@ -130,7 +138,10 @@ recognition model recorded in the project or export. GitHub's **Cite this reposi
 }
 ```
 
-The original default recognition model has its own DOI:
+KurrentScholar can receive a version DOI and a stable concept DOI by archiving GitHub Releases with
+Zenodo; the maintainer procedure is documented in [Publishing](docs/PUBLISHING.md). Until a Zenodo record
+exists, `CITATION.cff` and the tagged GitHub release are the canonical software citation—no placeholder DOI
+is claimed. The original default recognition model has its own DOI:
 [`10.57967/hf/0442`](https://doi.org/10.57967/hf/0442). KurrentScholar did not develop or train the
 upstream recognition models.
 
@@ -148,5 +159,5 @@ according to [SECURITY.md](SECURITY.md), and never attach confidential manuscrip
 ## License
 
 KurrentScholar's original source code is released under the [MIT License](LICENSE). Third-party libraries,
-recognition models, and optional helper models retain their own licenses and attribution requirements; see
+recognition models retain their own licenses and attribution requirements; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

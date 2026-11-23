@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 APP_NAME = "KurrentScholar"
-PROJECT_SCHEMA_VERSION = 1
+PROJECT_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,35 +109,7 @@ EARLY_KURRENT_MODEL = ModelSpec(
     safetensors_sha256="dfb88d0a11fecc1fb92152a9d435e16c787bb6190c4995f277e4dfeb2976d065",
 )
 
-HELPER_MODEL = ModelSpec(
-    key="smollm2-135m-instruct",
-    display_name="Local Help Assistant (SmolLM2 135M)",
-    model_id="HuggingFaceTB/SmolLM2-135M-Instruct",
-    revision="12fd25f77366fa6b3b4b768ec3050bf629380bac",
-    doi=None,
-    license="Apache-2.0",
-    max_new_tokens=180,
-    kind="helper",
-    summary=(
-        "Optional English-language, on-device navigation assistant. It never receives "
-        "manuscript images or transcriptions and may occasionally be wrong."
-    ),
-    file_sizes={
-        "README.md": 6_772,
-        "config.json": 861,
-        "generation_config.json": 132,
-        "merges.txt": 466_391,
-        "model.safetensors": 269_060_552,
-        "special_tokens_map.json": 655,
-        "tokenizer.json": 2_104_556,
-        "tokenizer_config.json": 3_764,
-        "vocab.json": 800_662,
-    },
-    safetensors_sha256="5af571cbf074e6d21a03528d2330792e532ca608f24ac70a143f6b369968ab8c",
-)
-
 MODEL_CATALOG = (LEGACY_MODEL, EARLY_KURRENT_MODEL, BROAD_KURRENT_MODEL)
-DOWNLOAD_CATALOG = (*MODEL_CATALOG, HELPER_MODEL)
 DEFAULT_MODEL = LEGACY_MODEL
 
 

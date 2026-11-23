@@ -26,6 +26,8 @@ class StoredLine:
     notes: str
     truncated: bool
     recognition_error: str | None
+    annotations: list[dict[str, Any]]
+    polygon: list[tuple[float, float]]
 
     @property
     def display_text(self) -> str:
@@ -51,6 +53,7 @@ CREATE TABLE IF NOT EXISTS pages (
   height INTEGER NOT NULL CHECK (height > 0),
   dpi INTEGER NOT NULL,
   rotation INTEGER NOT NULL DEFAULT 0,
+  deskew_angle REAL NOT NULL DEFAULT 0,
   segmentation_status TEXT NOT NULL DEFAULT 'pending',
   segmentation_error TEXT,
   processed_at TEXT
@@ -69,6 +72,8 @@ CREATE TABLE IF NOT EXISTS lines (
   notes TEXT NOT NULL DEFAULT '',
   truncated INTEGER NOT NULL DEFAULT 0 CHECK (truncated IN (0,1)),
   recognition_error TEXT,
+  annotations_json TEXT NOT NULL DEFAULT '[]',
+  polygon_json TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE(page_number, reading_order)
@@ -130,10 +135,36 @@ class ProjectDatabase:
 
     def _validate_version(self) -> None:
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
+        if version == 1 and PROJECT_SCHEMA_VERSION == 2:
+            self._migrate_v1_to_v2()
+            version = 2
         if version != PROJECT_SCHEMA_VERSION:
             self.connection.close()
             raise ValueError(
                 f"Unsupported project schema {version}; this version supports {PROJECT_SCHEMA_VERSION}"
+            )
+
+    def _migrate_v1_to_v2(self) -> None:
+        """Add rich review annotations and deskew geometry without losing v1 work."""
+
+        backup = self.path.with_name(f"{self.path.stem}.schema-v1-backup{self.path.suffix}")
+        if not backup.exists():
+            self.backup_to(backup)
+        with self.connection:
+            self.connection.execute(
+                "ALTER TABLE pages ADD COLUMN deskew_angle REAL NOT NULL DEFAULT 0"
+            )
+            self.connection.execute(
+                "ALTER TABLE lines ADD COLUMN annotations_json TEXT NOT NULL DEFAULT '[]'"
+            )
+            self.connection.execute(
+                "ALTER TABLE lines ADD COLUMN polygon_json TEXT NOT NULL DEFAULT '[]'"
+            )
+            self.connection.execute(f"PRAGMA user_version={PROJECT_SCHEMA_VERSION}")
+            self.connection.execute(
+                "INSERT INTO project_info(key,value) VALUES('schema_version',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (str(PROJECT_SCHEMA_VERSION),),
             )
 
     def close(self) -> None:
@@ -216,17 +247,29 @@ class ProjectDatabase:
         height: int,
         dpi: int,
         rotation: int = 0,
+        deskew_angle: float = 0.0,
         status: str = "segmented",
         error: str | None = None,
     ) -> None:
         with self.connection:
             self.connection.execute(
-                """INSERT INTO pages(page_number,width,height,dpi,rotation,segmentation_status,segmentation_error,processed_at)
-                   VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(page_number) DO UPDATE SET
+                """INSERT INTO pages(page_number,width,height,dpi,rotation,deskew_angle,segmentation_status,segmentation_error,processed_at)
+                   VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(page_number) DO UPDATE SET
                    width=excluded.width,height=excluded.height,dpi=excluded.dpi,rotation=excluded.rotation,
+                   deskew_angle=excluded.deskew_angle,
                    segmentation_status=excluded.segmentation_status,segmentation_error=excluded.segmentation_error,
                    processed_at=excluded.processed_at""",
-                (page_number, width, height, dpi, rotation, status, error, utc_now()),
+                (
+                    page_number,
+                    width,
+                    height,
+                    dpi,
+                    rotation,
+                    float(deskew_angle),
+                    status,
+                    error,
+                    utc_now(),
+                ),
             )
 
     def add_line(
@@ -240,18 +283,20 @@ class ProjectDatabase:
         token_ids: list[int],
         truncated: bool = False,
         recognition_error: str | None = None,
+        polygon: list[tuple[float, float]] | None = None,
     ) -> int:
         now = utc_now()
         with self.connection:
             self.connection.execute(
                 """INSERT INTO lines(page_number,reading_order,x,y,width,height,machine_text,confidence,
-                   token_probabilities_json,token_ids_json,truncated,recognition_error,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   token_probabilities_json,token_ids_json,truncated,recognition_error,polygon_json,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(page_number,reading_order) DO UPDATE SET x=excluded.x,y=excluded.y,
                    width=excluded.width,height=excluded.height,machine_text=excluded.machine_text,
                    confidence=excluded.confidence,token_probabilities_json=excluded.token_probabilities_json,
                    token_ids_json=excluded.token_ids_json,truncated=excluded.truncated,
-                   recognition_error=excluded.recognition_error,updated_at=excluded.updated_at
+                   recognition_error=excluded.recognition_error,polygon_json=excluded.polygon_json,
+                   updated_at=excluded.updated_at
                    WHERE lines.machine_text='' AND lines.corrected_text IS NULL""",
                 (
                     page_number,
@@ -266,6 +311,7 @@ class ProjectDatabase:
                     json.dumps(token_ids),
                     int(truncated),
                     recognition_error,
+                    json.dumps(polygon or []),
                     now,
                     now,
                 ),
@@ -289,6 +335,8 @@ class ProjectDatabase:
 
     @staticmethod
     def _stored_line(row: sqlite3.Row) -> StoredLine:
+        annotations = json.loads(row["annotations_json"] or "[]")
+        polygon = json.loads(row["polygon_json"] or "[]")
         return StoredLine(
             id=row["id"],
             page_number=row["page_number"],
@@ -302,6 +350,8 @@ class ProjectDatabase:
             notes=row["notes"],
             truncated=bool(row["truncated"]),
             recognition_error=row["recognition_error"],
+            annotations=annotations if isinstance(annotations, list) else [],
+            polygon=[(float(point[0]), float(point[1])) for point in polygon if len(point) == 2],
         )
 
     def line(self, line_id: int) -> StoredLine:
@@ -310,21 +360,35 @@ class ProjectDatabase:
             raise KeyError(f"Unknown line {line_id}")
         return self._stored_line(row)
 
-    def correct_line(self, line_id: int, text: str) -> bool:
-        row = self.connection.execute("SELECT corrected_text,machine_text FROM lines WHERE id=?", (line_id,)).fetchone()
+    def correct_line(
+        self,
+        line_id: int,
+        text: str,
+        annotations: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        row = self.connection.execute(
+            "SELECT corrected_text,machine_text,annotations_json FROM lines WHERE id=?", (line_id,)
+        ).fetchone()
         if row is None:
             raise KeyError(f"Unknown line {line_id}")
         previous = row["corrected_text"] if row["corrected_text"] is not None else row["machine_text"]
-        if text == previous:
+        previous_annotations = json.loads(row["annotations_json"] or "[]")
+        next_annotations = annotations if annotations is not None else previous_annotations
+        text_changed = text != previous
+        annotations_changed = next_annotations != previous_annotations
+        if not text_changed and not annotations_changed:
             return False
         with self.connection:
+            corrected_text = text if text_changed else row["corrected_text"]
             self.connection.execute(
-                "UPDATE lines SET corrected_text=?,updated_at=? WHERE id=?", (text, utc_now(), line_id)
+                "UPDATE lines SET corrected_text=?,annotations_json=?,updated_at=? WHERE id=?",
+                (corrected_text, json.dumps(next_annotations, ensure_ascii=False), utc_now(), line_id),
             )
-            self.connection.execute(
-                "INSERT INTO correction_history(line_id,previous_text,new_text,changed_at) VALUES(?,?,?,?)",
-                (line_id, previous, text, utc_now()),
-            )
+            if text_changed:
+                self.connection.execute(
+                    "INSERT INTO correction_history(line_id,previous_text,new_text,changed_at) VALUES(?,?,?,?)",
+                    (line_id, previous, text, utc_now()),
+                )
         return True
 
     def set_review_status(self, line_id: int, status: ReviewStatus) -> None:

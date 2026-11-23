@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.0 — unreleased
+
+- Removed KurrentBot, its optional language model, configuration, packaging hooks, documentation, and UI
+  entry points after field use showed that curated in-app help did not justify its complexity or disk use.
+- Removed duplicate Export and Save toolbar controls. Export remains a clear top-level menu, Save retains
+  its standard shortcut, and Auto Save remains enabled by default.
+- Added conservative ±7° page deskewing before line detection and recognition. OCR receives horizontal
+  crops while source overlays retain rotated polygon geometry on the unmodified manuscript image.
+- Added a vertically resizable transcription editor, persistent user-selected text size, UTF-8 special
+  character insertion, Word-like superscript/subscript shortcuts, highlights, and named or custom word tags.
+- Migrated projects transactionally from schema 1 to schema 2. Rich annotations and polygon geometry now
+  survive reopening and are represented in Word, CSV, Excel, and research JSON exports.
+- Added native Apple Silicon and Intel macOS packaging with mandatory Developer ID signing, notarization,
+  stapling, architecture-specific checksums, and stable GitHub Release download names.
+- Documented Zenodo release archiving for a genuine version DOI and concept DOI without inventing a
+  placeholder identifier.
+
 ## 1.0.0 — 2026-11-21
 
 - Fixed Excel repair warnings by removing the duplicate worksheet/table AutoFilter declaration and

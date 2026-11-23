@@ -20,6 +20,18 @@ Mark a line verified only after comparison with the manuscript.
 **Review > Auto Save** is enabled by default and persists across launches. Turn it off if you prefer explicit
 **Ctrl+S** saves; KurrentScholar still protects the active edit before switching context or closing.
 
+Drag the divider between the line list and transcription editor to give the editor more or less height.
+The text-size control is remembered across launches. Select text and use `x²` / `x₂` (or
+**Ctrl+Shift+=** / **Ctrl+=**) for superscript and subscript. The special-character menu includes German
+letters and common archival signs; normal Unicode keyboard input is preserved. Highlight applies a visual
+mark. Tag applies a named color to a word or selection; Person, Place, Organization, Date, Unclear, and
+custom labels are available. These ranges are stored in the project and included in rich/structured
+exports. Plain-text export deliberately contains only the characters.
+
+Opening a version-1 project in KurrentScholar 1.1 upgrades its schema once. Before changing the original,
+the application creates a sibling file named `.schema-v1-backup.ksproj`; keep that recovery copy until the
+upgraded project has been checked.
+
 Use **Recognition model** to inspect or change the checkpoint assigned to a project. Existing projects
 retain their recorded checkpoint. Changing a processed project first creates a separate backup and then
 clears derived line results, because outputs from two models must not be mixed. Install the desired pinned
@@ -34,16 +46,9 @@ boxes and OCR output. KurrentScholar first creates a timestamped `.ksproj` backu
 Corrections and review decisions remain available in that backup but are not automatically transferable
 to changed line geometry.
 
-The top-level **Export** menu and toolbar button provide all output formats. Exports can use corrected or
+The top-level **Export** menu provides all output formats. Exports can use corrected or
 machine text and retain page/line information. CSV cells beginning with
 spreadsheet formula characters are neutralized. JSON contains model/software provenance and both text
-versions. DOCX uncertainty is a review aid, not calibrated accuracy.
-
-**Ask KurrentBot** in the upper-right toolbar opens the optional local helper beside the workspace. It keeps
-the conversation visible while you work and offers navigation or troubleshooting guidance; manuscript text
-is neither required nor sent anywhere.
-
-The development UI currently lacks page thumbnails, geometry editing, metadata forms, bilingual runtime
-strings, project relinking, pause/resume controls distinct from cancellation, and settings dialogs. These
-are tracked honestly in `TODO.md`.
+versions. Word preserves superscript, subscript, highlights, and tags; CSV, Excel, and JSON expose explicit
+tag/annotation fields. DOCX uncertainty is a review aid, not calibrated accuracy.
 

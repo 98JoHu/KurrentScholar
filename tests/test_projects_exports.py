@@ -1,5 +1,6 @@
 import csv
 import json
+import sqlite3
 
 from kurrentscholar.domain import BoundingBox, ReviewStatus
 from kurrentscholar.exports import (
@@ -34,6 +35,51 @@ def test_project_preserves_machine_output_and_history(tmp_path):
         assert line.machine_text == "=machine"
         assert line.display_text == "Korrektur äöü"
         assert line.review_status == "verified"
+
+
+def test_v1_project_migrates_annotations_and_deskew_columns_transactionally(tmp_path):
+    path = tmp_path / "legacy.ksproj"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        PRAGMA user_version=1;
+        CREATE TABLE project_info (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO project_info VALUES ('schema_version', '1');
+        CREATE TABLE pages (
+          page_number INTEGER PRIMARY KEY, width INTEGER NOT NULL, height INTEGER NOT NULL,
+          dpi INTEGER NOT NULL, rotation INTEGER NOT NULL DEFAULT 0,
+          segmentation_status TEXT NOT NULL DEFAULT 'pending', segmentation_error TEXT,
+          processed_at TEXT
+        );
+        CREATE TABLE lines (
+          id INTEGER PRIMARY KEY, page_number INTEGER NOT NULL, reading_order INTEGER NOT NULL,
+          x INTEGER NOT NULL, y INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
+          machine_text TEXT NOT NULL DEFAULT '', corrected_text TEXT, confidence REAL,
+          token_probabilities_json TEXT NOT NULL DEFAULT '[]', token_ids_json TEXT NOT NULL DEFAULT '[]',
+          review_status TEXT NOT NULL DEFAULT 'unreviewed', notes TEXT NOT NULL DEFAULT '',
+          truncated INTEGER NOT NULL DEFAULT 0, recognition_error TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        INSERT INTO pages VALUES (1, 1000, 1500, 300, 0, 'segmented', NULL, 'now');
+        INSERT INTO lines VALUES (
+          1, 1, 0, 10, 20, 300, 40, 'legacy text', NULL, .8,
+          '[]', '[]', 'unreviewed', '', 0, NULL, 'now', 'now'
+        );
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    with ProjectDatabase(path) as project:
+        assert project.connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert project.page(1)["deskew_angle"] == 0
+        assert project.line(1).annotations == []
+        assert project.line(1).polygon == []
+    backup = tmp_path / "legacy.schema-v1-backup.ksproj"
+    assert backup.is_file()
+    connection = sqlite3.connect(backup)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    connection.close()
 
 
 def test_identical_edit_is_not_added_to_history(tmp_path):
@@ -89,7 +135,15 @@ def test_project_backup_and_transcription_reset_preserve_source(tmp_path):
 
 
 def test_exports_are_utf8_structured_and_csv_safe(tmp_path):
-    _, project, _ = make_project(tmp_path)
+    _, project, line_id = make_project(tmp_path)
+    project.correct_line(
+        line_id,
+        "H2O Straße",
+        [
+            {"start": 1, "end": 2, "kind": "subscript"},
+            {"start": 4, "end": 10, "kind": "tag", "label": "Place", "color": "#C9DDF7"},
+        ],
+    )
     project.set_info({"model_id": "example/model", "model_revision": "pinned-revision"})
     text = tmp_path / "out.txt"
     data = tmp_path / "out.json"
@@ -106,16 +160,24 @@ def test_exports_are_utf8_structured_and_csv_safe(tmp_path):
     assert payload["lines"][0]["machine_text"] == "=machine"
     assert payload["provenance"]["model_id"] == "example/model"
     assert payload["provenance"]["model_revision"] == "pinned-revision"
+    assert payload["lines"][0]["annotations"][0]["kind"] == "subscript"
     with table.open(encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.reader(stream))
     assert rows[1][3] == "'=machine"
+    assert rows[1][12] == "Place"
     assert word.stat().st_size > 0
+    from docx import Document
+
+    word_document = Document(word)
+    assert any(run.font.subscript for paragraph in word_document.paragraphs for run in paragraph.runs)
+    assert any("Tags: Place" in paragraph.text for paragraph in word_document.paragraphs)
     from openpyxl import load_workbook
 
     workbook = load_workbook(excel, read_only=True, data_only=False)
     assert workbook.sheetnames == ["Transcription", "Summary", "Provenance"]
     assert workbook["Transcription"]["D2"].value == "'=machine"
-    assert workbook["Transcription"]["F2"].value == "'=machine"
+    assert workbook["Transcription"]["F2"].value == "H2O Straße"
+    assert workbook["Transcription"]["O2"].value == "Place"
     assert workbook["Provenance"]["B6"].value == project.document()["sha256"]
     workbook.close()
     import zipfile

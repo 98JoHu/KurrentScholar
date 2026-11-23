@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kurrentscholar"
-version = "1.0.0"
+version = "1.1.0"
 description = "Offline-first desktop transcription for historical German Kurrent manuscripts"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
@@ -19,6 +19,7 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Operating System :: Microsoft :: Windows :: Windows 10",
   "Operating System :: Microsoft :: Windows :: Windows 11",
+  "Operating System :: MacOS :: MacOS X",
   "Programming Language :: Python :: 3.11",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]

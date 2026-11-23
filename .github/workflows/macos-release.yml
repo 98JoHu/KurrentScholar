@@ -1,0 +1,120 @@
+name: macOS release artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            architecture: Apple-Silicon
+            artifact: KurrentScholar-macOS-Apple-Silicon.dmg
+          - runner: macos-15-intel
+            architecture: Intel
+            artifact: KurrentScholar-macOS-Intel.dmg
+    runs-on: ${{ matrix.runner }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require signing and notarization credentials
+        shell: bash
+        run: |
+          for variable in APPLE_CERTIFICATE_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_CODESIGN_IDENTITY APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!variable}" ]]; then
+              echo "Required GitHub Actions secret $variable is missing." >&2
+              exit 1
+            fi
+          done
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.5.24"
+          enable-cache: true
+      - run: uv python install 3.11
+      - run: uv sync --extra dev --frozen
+      - run: uv run ruff check src tests
+      - run: uv run pytest -m "not real_model"
+      - name: Import Developer ID certificate
+        shell: bash
+        run: |
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          keychain="$RUNNER_TEMP/kurrentscholar.keychain-db"
+          keychain_password="$(openssl rand -base64 24)"
+          printf '%s' "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+      - name: Build native application bundle
+        shell: bash
+        run: |
+          bash packaging/macos/build_icon.sh
+          uv run pyinstaller packaging/macos/KurrentScholar.spec --noconfirm --clean
+          dist/KurrentScholar.app/Contents/MacOS/KurrentScholar --smoke-test
+      - name: Sign, notarize, and staple DMG
+        shell: bash
+        run: |
+          codesign --force --deep --options runtime --timestamp \
+            --entitlements packaging/macos/entitlements.plist \
+            --sign "$APPLE_CODESIGN_IDENTITY" dist/KurrentScholar.app
+          codesign --verify --deep --strict --verbose=2 dist/KurrentScholar.app
+
+          mkdir -p dist/dmg-root
+          ditto dist/KurrentScholar.app dist/dmg-root/KurrentScholar.app
+          ln -s /Applications dist/dmg-root/Applications
+          hdiutil create -volname KurrentScholar -srcfolder dist/dmg-root \
+            -ov -format UDZO "dist/${{ matrix.artifact }}"
+          codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" \
+            "dist/${{ matrix.artifact }}"
+          xcrun notarytool submit "dist/${{ matrix.artifact }}" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "dist/${{ matrix.artifact }}"
+          xcrun stapler validate "dist/${{ matrix.artifact }}"
+          spctl --assess --type open --context context:primary-signature --verbose=2 \
+            "dist/${{ matrix.artifact }}"
+          shasum -a 256 "dist/${{ matrix.artifact }}" > \
+            "dist/SHA256SUMS-macOS-${{ matrix.architecture }}.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KurrentScholar-macOS-${{ matrix.architecture }}-notarized
+          path: |
+            dist/${{ matrix.artifact }}
+            dist/SHA256SUMS-macOS-${{ matrix.architecture }}.txt
+          if-no-files-found: error
+      - name: Attach to tagged GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in {1..30}; do
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              gh release upload "$GITHUB_REF_NAME" \
+                "dist/${{ matrix.artifact }}" \
+                "dist/SHA256SUMS-macOS-${{ matrix.architecture }}.txt" \
+                --clobber
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "The Windows workflow did not create release $GITHUB_REF_NAME in time." >&2
+          exit 1

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QRectF, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QDialog,
@@ -12,16 +12,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from kurrentscholar.constants import DOWNLOAD_CATALOG, HELPER_MODEL, ModelSpec
-from kurrentscholar.recognition import LocalHelpBackend, ModelManager
+from kurrentscholar.constants import MODEL_CATALOG, ModelSpec
+from kurrentscholar.recognition import ModelManager
 
 
 class TutorialOverlay(QWidget):
@@ -265,7 +263,7 @@ class ModelManagerDialog(QDialog):
     def refresh(self) -> None:
         selected_key = self.selected_spec().key if self.selected_spec() else None
         self.table.setRowCount(0)
-        for spec in DOWNLOAD_CATALOG:
+        for spec in MODEL_CATALOG:
             row = self.table.rowCount()
             self.table.insertRow(row)
             manager = ModelManager(spec=spec)
@@ -300,7 +298,7 @@ class ModelManagerDialog(QDialog):
         if row < 0 or not self.table.item(row, 0):
             return None
         key = self.table.item(row, 0).data(Qt.UserRole)
-        return next((spec for spec in DOWNLOAD_CATALOG if spec.key == key), None)
+        return next((spec for spec in MODEL_CATALOG if spec.key == key), None)
 
     def _emit(self, signal: Signal) -> None:
         spec = self.selected_spec()
@@ -316,199 +314,3 @@ class ModelManagerDialog(QDialog):
         self.select.setEnabled(bool(
             spec and spec.kind == "recognition" and status.installed and self.project_model is not None
         ))
-
-
-class HelpWorker(QObject):
-    answered = Signal(str)
-    failed = Signal(str)
-
-    def __init__(self, backend: LocalHelpBackend, question: str) -> None:
-        super().__init__()
-        self.backend = backend
-        self.question = question
-
-    @Slot()
-    def run(self) -> None:
-        try:
-            self.answered.emit(self.backend.answer(self.question))
-        except Exception as error:
-            self.failed.emit(str(error))
-
-
-class LocalHelpPanel(QWidget):
-    install_requested = Signal(object)
-    close_requested = Signal()
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setObjectName("helperPanel")
-        self.setMinimumWidth(350)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        self._message_labels: list[QLabel] = []
-        self._thinking: QLabel | None = None
-
-        avatar = QLabel("?")
-        avatar.setObjectName("helperAvatar")
-        avatar.setAlignment(Qt.AlignCenter)
-        title = QLabel("KurrentBot")
-        title.setObjectName("helperTitle")
-        subtitle = QLabel("Local guide to KurrentScholar")
-        subtitle.setObjectName("helperSubtitle")
-        identity = QVBoxLayout()
-        identity.setSpacing(0)
-        identity.addWidget(title)
-        identity.addWidget(subtitle)
-        reset = QPushButton("↻")
-        reset.setObjectName("helperHeaderButton")
-        reset.setToolTip("Start a new conversation")
-        close = QPushButton("×")
-        close.setObjectName("helperHeaderButton")
-        close.setToolTip("Close KurrentBot")
-        reset.clicked.connect(self.reset_conversation)
-        close.clicked.connect(self.close_requested)
-        header = QHBoxLayout()
-        header.addWidget(avatar)
-        header.addLayout(identity)
-        header.addStretch(1)
-        header.addWidget(reset)
-        header.addWidget(close)
-
-        notice = QLabel(
-            "Optional and fully local after installation. Ask about navigation and troubleshooting; "
-            "do not paste manuscript text."
-        )
-        notice.setObjectName("helperNotice")
-        notice.setWordWrap(True)
-
-        self.message_area = QScrollArea()
-        self.message_area.setObjectName("helperMessages")
-        self.message_area.setWidgetResizable(True)
-        self.message_area.setFrameShape(QFrame.NoFrame)
-        message_host = QWidget()
-        message_host.setObjectName("helperMessageHost")
-        self.messages = QVBoxLayout(message_host)
-        self.messages.setContentsMargins(10, 12, 10, 12)
-        self.messages.setSpacing(10)
-        self.messages.setAlignment(Qt.AlignTop)
-        self.message_area.setWidget(message_host)
-
-        self.question = QLineEdit()
-        self.question.setObjectName("helperInput")
-        self.question.setPlaceholderText("Ask how to use KurrentScholar…")
-        self.question.setMaxLength(400)
-        self.question.returnPressed.connect(self._ask)
-        self.ask = QPushButton("Send")
-        self.ask.setObjectName("helperSend")
-        self.install = QPushButton("Install helper model")
-        self.install.setObjectName("helperInstall")
-        self.ask.clicked.connect(self._ask)
-        self.install.clicked.connect(lambda: self.install_requested.emit(HELPER_MODEL))
-        input_row = QHBoxLayout()
-        input_row.addWidget(self.question, 1)
-        input_row.addWidget(self.ask)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.addLayout(header)
-        layout.addWidget(notice)
-        layout.addWidget(self.message_area, 1)
-        layout.addWidget(self.install)
-        layout.addLayout(input_row)
-        self._thread: QThread | None = None
-        self._worker: HelpWorker | None = None
-        self._backend: LocalHelpBackend | None = None
-        self.reset_conversation()
-        self.refresh()
-
-    def refresh(self) -> None:
-        installed = ModelManager(spec=HELPER_MODEL).status().installed
-        self.ask.setEnabled(installed and self._thread is None)
-        self.question.setEnabled(installed and self._thread is None)
-        self.install.setVisible(not installed)
-
-    def _ask(self) -> None:
-        manager = ModelManager(spec=HELPER_MODEL)
-        if not manager.status().installed or self._thread is not None:
-            return
-        question = self.question.text().strip()
-        if not question:
-            self.question.setFocus()
-            return
-        self._add_message(question, user=True)
-        self.question.clear()
-        self._thinking = self._add_message("Thinking locally…", user=False)
-        self.ask.setEnabled(False)
-        self.question.setEnabled(False)
-        self._thread = QThread(self)
-        if self._backend is None:
-            self._backend = LocalHelpBackend(manager.root)
-        self._worker = HelpWorker(self._backend, question)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.answered.connect(self._finished)
-        self._worker.failed.connect(lambda message: self._finished(f"The helper failed: {message}"))
-        self._worker.answered.connect(self._thread.quit)
-        self._worker.failed.connect(self._thread.quit)
-        self._worker.answered.connect(self._worker.deleteLater)
-        self._worker.failed.connect(self._worker.deleteLater)
-        self._thread.finished.connect(self._thread_finished)
-        self._thread.start()
-
-    @Slot(str)
-    def _finished(self, message: str) -> None:
-        if self._thinking:
-            self._thinking.setText(message)
-            self._thinking = None
-        else:
-            self._add_message(message, user=False)
-        QTimer.singleShot(0, self._scroll_to_bottom)
-
-    @Slot()
-    def _thread_finished(self) -> None:
-        if self._thread:
-            self._thread.deleteLater()
-        self._worker = None
-        self._thread = None
-        self.refresh()
-
-    def reset_conversation(self) -> None:
-        if self._thread is not None:
-            return
-        while self.messages.count():
-            item = self.messages.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        self._message_labels.clear()
-        self._add_message(
-            "Hi, I’m KurrentBot — your local guide to KurrentScholar. Ask me how to open a "
-            "project, transcribe selected pages, review uncertain lines, manage models, or export results.",
-            user=False,
-        )
-
-    def _add_message(self, text: str, *, user: bool) -> QLabel:
-        label = QLabel(text)
-        label.setObjectName("helperUserMessage" if user else "helperBotMessage")
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
-        label.setMaximumWidth(300)
-        row = QHBoxLayout()
-        if user:
-            row.addStretch(1)
-            row.addWidget(label)
-        else:
-            row.addWidget(label)
-            row.addStretch(1)
-        holder = QWidget()
-        holder.setObjectName("helperMessageRow")
-        holder.setLayout(row)
-        self.messages.addWidget(holder)
-        self._message_labels.append(label)
-        QTimer.singleShot(0, self._scroll_to_bottom)
-        return label
-
-    def _scroll_to_bottom(self) -> None:
-        bar = self.message_area.verticalScrollBar()
-        bar.setValue(bar.maximum())
-
-    @property
-    def busy(self) -> bool:
-        return self._thread is not None

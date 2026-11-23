@@ -18,7 +18,13 @@ def test_main_window_starts(qtbot):
     assert window.actions["Auto Save"].isCheckable()
     top_level_menus = [item.text().replace("&", "") for item in window.menuBar().actions()]
     assert "Export" in top_level_menus
-    assert window._helper_dock is not None
+    toolbar_text = {
+        item.text() for toolbar in window.findChildren(__import__("PySide6.QtWidgets", fromlist=["QToolBar"]).QToolBar)
+        for item in toolbar.actions()
+    }
+    assert "Export" not in toolbar_text
+    assert "Save" not in toolbar_text
+    assert window.review_splitter.orientation().name == "Vertical"
 
 
 @pytest.mark.gui
@@ -37,23 +43,6 @@ def test_tutorial_starts_with_welcome_then_points_to_real_controls(qtbot):
     overlay._move(1)
     assert overlay.steps[1][2] is window._tutorial_targets["open"]
     overlay.close_tour()
-
-
-@pytest.mark.gui
-def test_helper_uses_right_side_panel(qtbot):
-    from PySide6.QtCore import Qt
-
-    from kurrentscholar.ui.main_window import MainWindow
-
-    window = MainWindow(offer_model_on_startup=False)
-    qtbot.addWidget(window)
-    window.show()
-    window.show_local_help()
-
-    assert window._helper_dock.isVisible()
-    assert window.dockWidgetArea(window._helper_dock) == Qt.RightDockWidgetArea
-    assert window.helper_button.isChecked()
-    assert "KurrentBot" in window._help_dialog._message_labels[0].text()
 
 
 @pytest.mark.gui
@@ -105,6 +94,53 @@ def test_hovering_transcription_highlights_matching_box(qtbot, tmp_path):
     overlay = next(item for item in window._overlays if item.data(0) == line_id)
     assert overlay.brush().color().alpha() > 0
     assert overlay.pen().width() == 3
+
+
+@pytest.mark.gui
+def test_rich_corrections_persist_unicode_superscript_and_tags(qtbot, tmp_path):
+    from PySide6.QtGui import QTextCursor
+
+    from kurrentscholar.domain import BoundingBox
+    from kurrentscholar.projects import ProjectDatabase
+    from kurrentscholar.ui.main_window import (
+        TAG_COLOR_PROPERTY,
+        TAG_PROPERTY,
+        MainWindow,
+    )
+
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"source")
+    project = ProjectDatabase(tmp_path / "annotations.ksproj", create=True)
+    project.set_document(source, 1)
+    project.upsert_page(1, 1000, 1500, 300)
+    line_id = project.add_line(
+        1, 0, BoundingBox(10, 20, 300, 40), "Straße H2O §", 0.8, [], []
+    )
+
+    window = MainWindow(offer_model_on_startup=False)
+    qtbot.addWidget(window)
+    window.project = project
+    window._refresh_lines()
+    window.line_list.setCurrentRow(0)
+
+    cursor = window.editor.textCursor()
+    cursor.setPosition(8)
+    cursor.setPosition(9, QTextCursor.KeepAnchor)
+    window.editor.setTextCursor(cursor)
+    window._toggle_vertical_format("subscript")
+
+    cursor.setPosition(0)
+    cursor.setPosition(6, QTextCursor.KeepAnchor)
+    formatting = cursor.charFormat()
+    formatting.setProperty(TAG_PROPERTY, "Person")
+    formatting.setProperty(TAG_COLOR_PROPERTY, "#F2C7C3")
+    cursor.mergeCharFormat(formatting)
+    window.save_current_edit()
+
+    stored = project.line(line_id)
+    assert stored.display_text == "Straße H2O §"
+    assert any(item["kind"] == "subscript" for item in stored.annotations)
+    assert any(item.get("label") == "Person" for item in stored.annotations)
 
 
 @pytest.mark.gui

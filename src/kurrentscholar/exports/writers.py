@@ -48,6 +48,43 @@ def _model_provenance(project: ProjectDatabase) -> dict[str, str | None]:
     }
 
 
+def _tag_labels(line) -> str:
+    return "; ".join(
+        dict.fromkeys(
+            str(annotation.get("label", "Tag"))
+            for annotation in line.annotations
+            if annotation.get("kind") == "tag"
+        )
+    )
+
+
+def _styled_segments(text: str, annotations: list[dict]) -> list[tuple[str, list[dict]]]:
+    """Split text at annotation boundaries so overlapping styles survive DOCX export."""
+
+    valid: list[dict] = []
+    boundaries = {0, len(text)}
+    for annotation in annotations:
+        try:
+            start = max(0, min(len(text), int(annotation["start"])))
+            end = max(start, min(len(text), int(annotation["end"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if start == end:
+            continue
+        normalized = {**annotation, "start": start, "end": end}
+        valid.append(normalized)
+        boundaries.update((start, end))
+    positions = sorted(boundaries)
+    return [
+        (
+            text[start:end],
+            [item for item in valid if int(item["start"]) <= start and int(item["end"]) >= end],
+        )
+        for start, end in zip(positions, positions[1:], strict=False)
+        if start < end
+    ]
+
+
 def export_text(project: ProjectDatabase, destination: str | Path, options: ExportOptions) -> None:
     output: list[str] = []
     current_page = None
@@ -70,21 +107,23 @@ def export_csv(project: ProjectDatabase, destination: str | Path) -> None:
         writer = csv.writer(stream)
         writer.writerow(
             ["document", "page", "line", "machine_text", "corrected_text", "confidence", "review_status",
-             "x", "y", "width", "height", "notes"]
+             "x", "y", "width", "height", "notes", "tags", "annotations", "polygon"]
         )
         for line in project.lines():
             writer.writerow([_safe_csv(value) for value in (
                 document.get("filename", ""), line.page_number, line.reading_order + 1, line.machine_text,
                 line.corrected_text if line.corrected_text is not None else "",
                 line.confidence, line.review_status, line.bbox.x, line.bbox.y,
-                line.bbox.width, line.bbox.height, line.notes,
+                line.bbox.width, line.bbox.height, line.notes, _tag_labels(line),
+                json.dumps(line.annotations, ensure_ascii=False),
+                json.dumps(line.polygon, ensure_ascii=False),
             )])
 
 
 def export_json(project: ProjectDatabase, destination: str | Path) -> None:
     model = _model_provenance(project)
     payload = {
-        "schema": "urn:kurrentscholar:export:1",
+        "schema": "urn:kurrentscholar:export:2",
         "schema_version": PROJECT_SCHEMA_VERSION,
         "provenance": {
             "software": "KurrentScholar",
@@ -124,6 +163,13 @@ def export_docx(project: ProjectDatabase, destination: str | Path, options: Expo
     thresholds = ConfidenceThresholds()
     colors = {"moderate": WD_COLOR_INDEX.YELLOW, "high_uncertainty": WD_COLOR_INDEX.DARK_YELLOW,
               "very_high_uncertainty": WD_COLOR_INDEX.RED}
+    tag_colors = {
+        "Person": WD_COLOR_INDEX.PINK,
+        "Place": WD_COLOR_INDEX.TURQUOISE,
+        "Organization": WD_COLOR_INDEX.VIOLET,
+        "Date": WD_COLOR_INDEX.BRIGHT_GREEN,
+        "Unclear": WD_COLOR_INDEX.YELLOW,
+    }
     for line in project.lines():
         if line.page_number != current_page:
             document.add_heading(f"Page {line.page_number}", level=1)
@@ -131,11 +177,34 @@ def export_docx(project: ProjectDatabase, destination: str | Path, options: Expo
         paragraph = document.add_paragraph()
         if options.line_numbers:
             paragraph.add_run(f"{line.reading_order + 1}: ")
-        run = paragraph.add_run(_text(line, options.corrected))
+        text = _text(line, options.corrected)
+        for segment, segment_annotations in _styled_segments(text, line.annotations):
+            run = paragraph.add_run(segment)
+            kinds = {str(annotation.get("kind")) for annotation in segment_annotations}
+            run.font.superscript = "superscript" in kinds
+            run.font.subscript = "subscript" in kinds
+            tag = next(
+                (
+                    annotation
+                    for annotation in segment_annotations
+                    if annotation.get("kind") == "tag"
+                ),
+                None,
+            )
+            if tag:
+                run.font.highlight_color = tag_colors.get(
+                    str(tag.get("label")), WD_COLOR_INDEX.YELLOW
+                )
+            elif "highlight" in kinds:
+                run.font.highlight_color = WD_COLOR_INDEX.YELLOW
         label = thresholds.classify(line.confidence).value
-        if options.uncertainty_markers and label in colors:
-            run.font.highlight_color = colors[label]
-            paragraph.add_run(f" [{label.replace('_', ' ')}]")
+        if options.uncertainty_markers:
+            marker = paragraph.add_run(f" [{label.replace('_', ' ')}]")
+            if label in colors:
+                marker.font.highlight_color = colors[label]
+        tags = _tag_labels(line)
+        if tags:
+            paragraph.add_run(f" [Tags: {tags}]").italic = True
     model = _model_provenance(project)
     doi = f", doi:{model['model_doi']}" if model["model_doi"] else ""
     document.add_paragraph(
@@ -159,6 +228,7 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
     headers = [
         "Document", "Page", "Line", "Machine text", "Corrected text", "Effective text",
         "Confidence", "Uncertainty", "Review status", "X", "Y", "Width", "Height", "Notes",
+        "Tags", "Annotations", "Polygon",
     ]
     transcript.append(headers)
     document = project.document() or {}
@@ -180,6 +250,9 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
             line.bbox.width,
             line.bbox.height,
             _safe_xlsx(line.notes),
+            _safe_xlsx(_tag_labels(line)),
+            _safe_xlsx(json.dumps(line.annotations, ensure_ascii=False)),
+            _safe_xlsx(json.dumps(line.polygon, ensure_ascii=False)),
         ])
     header_fill = PatternFill("solid", fgColor="9A6F6B")
     for cell in transcript[1]:
@@ -188,7 +261,7 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
         cell.alignment = Alignment(vertical="center")
     transcript.freeze_panes = "A2"
     transcript.sheet_view.showGridLines = False
-    widths = [24, 8, 8, 42, 42, 42, 12, 20, 16, 9, 9, 9, 9, 28]
+    widths = [24, 8, 8, 42, 42, 42, 12, 20, 16, 9, 9, 9, 9, 28, 22, 42, 42]
     for index, width in enumerate(widths, start=1):
         transcript.column_dimensions[chr(64 + index)].width = width
     for row in transcript.iter_rows(min_row=2):
@@ -198,7 +271,7 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
     for cell in transcript["G"][1:]:
         cell.number_format = "0.0%"
     if lines:
-        table = Table(displayName="KurrentScholarTranscription", ref=f"A1:N{transcript.max_row}")
+        table = Table(displayName="KurrentScholarTranscription", ref=f"A1:Q{transcript.max_row}")
         table.tableStyleInfo = TableStyleInfo(
             name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
             showRowStripes=True, showColumnStripes=False,

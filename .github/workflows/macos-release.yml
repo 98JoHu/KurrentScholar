@@ -75,6 +75,7 @@ jobs:
         run: |
           bash packaging/macos/build_icon.sh
           uv run pyinstaller packaging/macos/KurrentScholar.spec --noconfirm --clean
+          bash packaging/macos/sign.sh dist/KurrentScholar.app
           dist/KurrentScholar.app/Contents/MacOS/KurrentScholar --smoke-test
       - name: Sign, notarize, and staple DMG
         shell: bash

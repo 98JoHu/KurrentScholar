@@ -42,12 +42,14 @@ uv sync --extra dev --frozen
 bash packaging/macos/build_icon.sh
 export APPLE_CODESIGN_IDENTITY="<Developer ID Application certificate SHA-1>"
 uv run pyinstaller packaging/macos/KurrentScholar.spec --noconfirm --clean
+bash packaging/macos/sign.sh dist/KurrentScholar.app
 dist/KurrentScholar.app/Contents/MacOS/KurrentScholar --smoke-test
 codesign --verify --deep --strict --verbose=2 dist/KurrentScholar.app
 ```
 
-PyInstaller signs the nested binaries with the selected identity during collection. Avoid re-signing
-only the outer bundle after packaging. To finish an already signed DMG, first store notarization
+PyInstaller signs the nested binaries with the selected identity during collection. The signing helper
+then seals framework resources and the outer app and verifies the complete signature. Build/stage
+outside cloud-synced folders: Finder metadata added by a file provider can prevent signing. To finish an already signed DMG, first store notarization
 credentials on your Mac (the command prompts for your app-specific password; do not put it in chat):
 
 ```bash

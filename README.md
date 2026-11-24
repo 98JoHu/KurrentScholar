@@ -128,7 +128,7 @@ recognition model recorded in the project or export. GitHub's **Cite this reposi
 
 ```bibtex
 @software{hummel_2026_kurrentscholar,
-  author       = {Hummel, Jonas},
+  author       = {Hummel, Jonas and Lepold, Philipp},
   title        = {KurrentScholar: Offline Historical Kurrent Handwriting Transcription},
   year         = {2026},
   version      = {1.0.0},

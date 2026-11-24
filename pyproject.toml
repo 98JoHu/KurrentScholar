@@ -34,7 +34,9 @@ dependencies = [
   "pyside6==6.8.2.1",
   "python-docx==1.1.2",
   "safetensors==0.5.2",
-  "torch==2.5.1",
+  # PyTorch stopped publishing Intel macOS wheels after 2.2.2.
+  "torch==2.2.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+  "torch==2.5.1; sys_platform != 'darwin' or platform_machine != 'x86_64'",
   "transformers==4.48.3",
   "truststore==0.10.4",
 ]

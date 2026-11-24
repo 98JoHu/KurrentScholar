@@ -14,7 +14,7 @@ jobs:
       matrix:
         # Test the operating systems KurrentScholar actually distributes for.
         # macOS application signing is intentionally confined to the release workflow.
-        os: [windows-latest, macos-15]
+        os: [windows-latest, macos-15, macos-15-intel]
         python: ["3.11"]
     runs-on: ${{ matrix.os }}
     env:

@@ -1,4 +1,5 @@
 # Native macOS application bundle. Build separately on Apple Silicon and Intel.
+import os
 from pathlib import Path
 import tomllib
 
@@ -10,6 +11,10 @@ from PyInstaller.utils.hooks import (
 )
 
 root = Path(SPECPATH).parent.parent
+signing = {
+    "codesign_identity": os.environ.get("APPLE_CODESIGN_IDENTITY") or None,
+    "entitlements_file": str(root / "packaging" / "macos" / "entitlements.plist"),
+}
 version = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 
 datas = (
@@ -53,6 +58,7 @@ exe = EXE(
     name="KurrentScholar",
     console=False,
     disable_windowed_traceback=False,
+    **signing,
 )
 coll = COLLECT(
     exe,
@@ -61,12 +67,14 @@ coll = COLLECT(
     strip=False,
     upx=False,
     name="KurrentScholar",
+    **signing,
 )
 app = BUNDLE(
     coll,
     name="KurrentScholar.app",
     icon=str(root / "assets" / "branding" / "kurrentscholar.icns"),
     bundle_identifier="de.kit.kurrentscholar",
+    **signing,
     info_plist={
         "CFBundleDisplayName": "KurrentScholar",
         "CFBundleShortVersionString": version,

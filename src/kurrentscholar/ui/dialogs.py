@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QDialog,
@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -36,7 +38,7 @@ class TutorialOverlay(QWidget):
 
         self.card = QFrame(self)
         self.card.setObjectName("tutorialCard")
-        self.card.setMinimumWidth(390)
+        self.card.setMinimumWidth(280)
         self.card.setMaximumWidth(470)
         card_layout = QVBoxLayout(self.card)
         card_layout.setContentsMargins(24, 22, 24, 20)
@@ -49,6 +51,15 @@ class TutorialOverlay(QWidget):
         self.body.setObjectName("tutorialBody")
         self.body.setWordWrap(True)
         self.body.setTextFormat(Qt.PlainText)
+        self.body.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.body_scroll = QScrollArea()
+        self.body_scroll.setObjectName("tutorialBodyScroll")
+        self.body_scroll.setFrameShape(QFrame.NoFrame)
+        self.body_scroll.setWidgetResizable(True)
+        self.body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.body_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.body_scroll.setWidget(self.body)
         self.progress = QLabel()
         self.progress.setObjectName("tutorialProgress")
         self.back = QPushButton("Back")
@@ -60,14 +71,14 @@ class TutorialOverlay(QWidget):
         buttons = QHBoxLayout()
         buttons.addWidget(self.progress)
         buttons.addStretch(1)
+        buttons.addWidget(self.skip)
         buttons.addWidget(self.back)
         buttons.addWidget(self.next)
         card_layout.addWidget(self.kicker)
         card_layout.addWidget(self.heading)
-        card_layout.addWidget(self.body)
+        card_layout.addWidget(self.body_scroll)
         card_layout.addSpacing(8)
         card_layout.addLayout(buttons)
-        card_layout.addWidget(self.skip, alignment=Qt.AlignRight)
         self._sync()
 
     def showEvent(self, event) -> None:
@@ -120,39 +131,106 @@ class TutorialOverlay(QWidget):
         return QRect(top_left, target.size()).adjusted(-8, -8, 8, 8)
 
     def _position_card(self) -> None:
-        self.card.adjustSize()
-        size = self.card.sizeHint()
-        width = min(max(size.width(), 390), min(470, max(390, self.width() - 40)))
+        if self.width() <= 0 or self.height() <= 0:
+            return
+        margin = min(24, max(12, min(self.width(), self.height()) // 24))
+        available_width = max(1, self.width() - margin * 2)
+        width = min(470, available_width)
         self.card.setFixedWidth(width)
-        self.card.adjustSize()
-        card_size = self.card.sizeHint()
-        margin = 24
+
+        layout = self.card.layout()
+        left, _top, right, _bottom = layout.getContentsMargins()
+        # Leave room for the vertical scrollbar when long copy needs it; otherwise
+        # a fixed-width label can hide the final characters beneath the scrollbar.
+        body_width = max(80, width - left - right - 24)
+        self.body.setMinimumWidth(body_width)
+        self.body.setMaximumWidth(body_width)
+        natural_body_height = max(
+            64,
+            self.body.heightForWidth(body_width),
+            self.body.sizeHint().height(),
+        )
+        self.body_scroll.setFixedHeight(natural_body_height + 4)
+        layout.activate()
+
+        available_height = max(1, self.height() - margin * 2)
+        natural_height = self.card.sizeHint().height()
+        if natural_height > available_height:
+            visible_body_height = max(
+                64,
+                natural_body_height - (natural_height - available_height),
+            )
+            self.body_scroll.setFixedHeight(visible_body_height)
+            layout.activate()
+        card_size = QSize(width, min(self.card.sizeHint().height(), available_height))
+        self.card.resize(card_size)
+
         target = self._target_rect()
         if target is None:
             x = max(margin, (self.width() - card_size.width()) // 2)
             y = max(margin, (self.height() - card_size.height()) // 2)
         else:
+            gap = 16
+            bounds = QRect(
+                margin,
+                margin,
+                max(1, self.width() - margin * 2),
+                max(1, self.height() - margin * 2),
+            )
             spaces = {
-                "left": target.left() - margin,
-                "right": self.width() - target.right() - margin,
-                "top": target.top() - margin,
-                "bottom": self.height() - target.bottom() - margin,
+                "left": target.left() - bounds.left(),
+                "right": bounds.right() - target.right(),
+                "top": target.top() - bounds.top(),
+                "bottom": bounds.bottom() - target.bottom(),
             }
-            side = max(spaces, key=spaces.get)
-            if side == "left":
-                x = target.left() - card_size.width() - margin
-                y = target.center().y() - card_size.height() // 2
-            elif side == "right":
-                x = target.right() + margin
-                y = target.center().y() - card_size.height() // 2
-            elif side == "top":
-                x = target.center().x() - card_size.width() // 2
-                y = target.top() - card_size.height() - margin
-            else:
-                x = target.center().x() - card_size.width() // 2
-                y = target.bottom() + margin
-            x = min(max(margin, x), max(margin, self.width() - card_size.width() - margin))
-            y = min(max(margin, y), max(margin, self.height() - card_size.height() - margin))
+            candidates = {
+                "left": QRect(
+                    target.left() - card_size.width() - gap,
+                    target.center().y() - card_size.height() // 2,
+                    card_size.width(),
+                    card_size.height(),
+                ),
+                "right": QRect(
+                    target.right() + gap,
+                    target.center().y() - card_size.height() // 2,
+                    card_size.width(),
+                    card_size.height(),
+                ),
+                "top": QRect(
+                    target.center().x() - card_size.width() // 2,
+                    target.top() - card_size.height() - gap,
+                    card_size.width(),
+                    card_size.height(),
+                ),
+                "bottom": QRect(
+                    target.center().x() - card_size.width() // 2,
+                    target.bottom() + gap,
+                    card_size.width(),
+                    card_size.height(),
+                ),
+            }
+
+            def contained(candidate: QRect) -> QRect:
+                return QRect(
+                    min(max(bounds.left(), candidate.x()), bounds.right() - candidate.width() + 1),
+                    min(max(bounds.top(), candidate.y()), bounds.bottom() - candidate.height() + 1),
+                    candidate.width(),
+                    candidate.height(),
+                )
+
+            def overlap_area(candidate: QRect) -> int:
+                overlap = candidate.intersected(target)
+                return max(0, overlap.width()) * max(0, overlap.height())
+
+            positioned = {
+                side: contained(candidate) for side, candidate in candidates.items()
+            }
+            side = min(
+                positioned,
+                key=lambda name: (overlap_area(positioned[name]), -spaces[name]),
+            )
+            selected = positioned[side]
+            x, y = selected.x(), selected.y()
         self.card.move(x, y)
         self.card.raise_()
 
@@ -169,6 +247,7 @@ class TutorialOverlay(QWidget):
         self.kicker.setText("WELCOME" if self.index == 0 else "QUICK TOUR")
         self.heading.setText(title)
         self.body.setText(body)
+        self.body_scroll.verticalScrollBar().setValue(0)
         self.progress.setText(f"{self.index + 1} of {len(self.steps)}")
         self.back.setEnabled(self.index > 0)
         self.next.setText("Start using KurrentScholar" if self.index == len(self.steps) - 1 else "Next")

@@ -46,6 +46,49 @@ def test_tutorial_starts_with_welcome_then_points_to_real_controls(qtbot):
 
 
 @pytest.mark.gui
+def test_tutorial_fits_small_windows_and_does_not_cover_its_target(qtbot):
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QWidget
+
+    from kurrentscholar.ui.dialogs import TutorialOverlay
+
+    parent = QWidget()
+    parent.resize(740, 425)
+    qtbot.addWidget(parent)
+    target = QWidget(parent)
+    target.setGeometry(QRect(500, 55, 210, 335))
+    target.show()
+    parent.show()
+
+    long_text = " ".join(
+        [
+            "KurrentScholar keeps every part of this explanation available on smaller screens."
+            for _ in range(12)
+        ]
+    )
+    overlay = TutorialOverlay(
+        [
+            ("Welcome to KurrentScholar", long_text, None),
+            ("Review the transcription", "This panel remains visible beside the explanation.", target),
+        ],
+        parent,
+    )
+    overlay.show()
+    qtbot.wait(50)
+
+    assert overlay.rect().contains(overlay.card.geometry())
+    assert overlay.body_scroll.verticalScrollBar().maximum() > 0
+
+    overlay._move(1)
+    qtbot.wait(20)
+    highlighted = overlay._target_rect()
+    assert highlighted is not None
+    assert not overlay.card.geometry().intersects(highlighted)
+    assert overlay.rect().contains(overlay.card.geometry())
+    overlay.close_tour()
+
+
+@pytest.mark.gui
 def test_live_boxes_use_stored_detection_scale_immediately(qtbot, tmp_path):
     from PySide6.QtGui import QPixmap
 

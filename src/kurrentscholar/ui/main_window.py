@@ -474,6 +474,8 @@ class MainWindow(QMainWindow):
             QFrame#tutorialCard { background: #FFFFFF; border: 1px solid #D9DEE5; border-radius: 18px; }
             QLabel#tutorialKicker { color: #9A6F6B; font-size: 11px; font-weight: 800; }
             QLabel#tutorialBody { color: #4F5B66; font-size: 14px; }
+            QScrollArea#tutorialBodyScroll { background: transparent; border: none; }
+            QScrollArea#tutorialBodyScroll > QWidget > QWidget { background: transparent; }
             QLabel#tutorialProgress { color: #7A858F; font-weight: 600; }
             QSpinBox { background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 9px; padding: 6px 8px; min-width: 112px; }
             QProgressDialog { background: #F4F7FB; }

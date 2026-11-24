@@ -54,5 +54,9 @@ jobs:
             gh release upload "$env:GITHUB_REF_NAME" $assets --clobber
           } else {
             gh release create "$env:GITHUB_REF_NAME" $assets --verify-tag --generate-notes --title "KurrentScholar $env:GITHUB_REF_NAME"
+            if ($LASTEXITCODE -ne 0) {
+              # A Mac job may have created the same release after our lookup.
+              gh release upload "$env:GITHUB_REF_NAME" $assets --clobber
+            }
           }
 

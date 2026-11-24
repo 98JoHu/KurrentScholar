@@ -3,13 +3,21 @@ name: macOS release artifacts
 on:
   workflow_dispatch:
   push:
+    branches: ["main"]
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: macos-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
+    permissions:
+      contents: write
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -61,18 +69,18 @@ jobs:
           security import "$certificate" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
           security list-keychains -d user -s "$keychain" login.keychain-db
+          rm -f "$certificate"
       - name: Build native application bundle
         shell: bash
         run: |
           bash packaging/macos/build_icon.sh
           uv run pyinstaller packaging/macos/KurrentScholar.spec --noconfirm --clean
+          bash packaging/macos/sign.sh dist/KurrentScholar.app
           dist/KurrentScholar.app/Contents/MacOS/KurrentScholar --smoke-test
       - name: Sign, notarize, and staple DMG
         shell: bash
         run: |
-          codesign --force --deep --options runtime --timestamp \
-            --entitlements packaging/macos/entitlements.plist \
-            --sign "$APPLE_CODESIGN_IDENTITY" dist/KurrentScholar.app
+          # PyInstaller signs nested Mach-O files during collection, from the inside out.
           codesign --verify --deep --strict --verbose=2 dist/KurrentScholar.app
 
           mkdir -p dist/dmg-root
@@ -91,7 +99,7 @@ jobs:
           xcrun stapler validate "dist/${{ matrix.artifact }}"
           spctl --assess --type open --context context:primary-signature --verbose=2 \
             "dist/${{ matrix.artifact }}"
-          shasum -a 256 "dist/${{ matrix.artifact }}" > \
+          (cd dist && shasum -a 256 "${{ matrix.artifact }}") > \
             "dist/SHA256SUMS-macOS-${{ matrix.architecture }}.txt"
       - uses: actions/upload-artifact@v4
         with:
@@ -106,15 +114,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for attempt in {1..30}; do
-            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-              gh release upload "$GITHUB_REF_NAME" \
-                "dist/${{ matrix.artifact }}" \
-                "dist/SHA256SUMS-macOS-${{ matrix.architecture }}.txt" \
-                --clobber
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "The Windows workflow did not create release $GITHUB_REF_NAME in time." >&2
-          exit 1
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes \
+              --title "KurrentScholar $GITHUB_REF_NAME" || \
+              gh release view "$GITHUB_REF_NAME"
+          fi
+          gh release upload "$GITHUB_REF_NAME" \
+            "dist/${{ matrix.artifact }}" \
+            "dist/SHA256SUMS-macOS-${{ matrix.architecture }}.txt" --clobber
+      - name: Remove signing keychain
+        if: always()
+        shell: bash
+        run: |
+          keychain="$RUNNER_TEMP/kurrentscholar.keychain-db"
+          if [[ -f "$keychain" ]]; then
+            security delete-keychain "$keychain"
+          fi
+          rm -f "$RUNNER_TEMP/developer-id.p12"

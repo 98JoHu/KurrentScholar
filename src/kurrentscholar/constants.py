@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 APP_NAME = "KurrentScholar"
-PROJECT_SCHEMA_VERSION = 2
+PROJECT_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True, slots=True)

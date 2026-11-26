@@ -25,6 +25,10 @@ Qt UI -> processing service -> renderer -> segmenter -> recognizer
   autoregressive decoder caching without changing model weights or decoding strategy.
 - `projects`: schema-versioned SQLite. `machine_text` and model scores are never overwritten when
   `corrected_text` changes. Writes use transactions, WAL, foreign keys, and incremental commits.
+  `lines.reading_order` is the detector's region number and identifies a line when a page is resumed;
+  `lines.position` is the reviewer-editable reading order used for display and exports.
+- `annotations`: character-range annotations (superscript, subscript, highlights, tags) and their shared
+  rendering, so the line list, editor, and exports name tags identically.
 - `exports`: representations are derived from stored provenance and escape spreadsheet formula cells.
 - `ui`: presentation and worker coordination; it contains no model logic.
 
@@ -64,6 +68,7 @@ Model download is the only built-in network path and is initiated by the user.
 
 ## Schema evolution
 
-`PRAGMA user_version` records the schema version. Migrations are forward-only and transactional. A newer
-project version is rejected with a useful error instead of being silently modified.
+`PRAGMA user_version` records the schema version. Migrations are forward-only and transactional, run in
+sequence (1 → 2 → 3), and are preceded by one recovery copy in the original schema. A newer project version
+is rejected with a useful error instead of being silently modified.
 

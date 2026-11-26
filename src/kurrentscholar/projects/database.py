@@ -14,9 +14,18 @@ from kurrentscholar.domain import BoundingBox, ReviewStatus
 
 @dataclass(slots=True)
 class StoredLine:
+    """One recognized line.
+
+    ``reading_order`` is the detector's region number on the page; re-running a page
+    matches detected regions to stored lines through it, so it never changes.
+    ``position`` is the line's place in the page's reading order, which a reviewer may
+    rearrange (for example to read a marginal note after the main text).
+    """
+
     id: int
     page_number: int
     reading_order: int
+    position: int
     bbox: BoundingBox
     machine_text: str
     corrected_text: str | None
@@ -62,6 +71,7 @@ CREATE TABLE IF NOT EXISTS lines (
   id INTEGER PRIMARY KEY,
   page_number INTEGER NOT NULL REFERENCES pages(page_number) ON DELETE CASCADE,
   reading_order INTEGER NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
   x INTEGER NOT NULL, y INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
   machine_text TEXT NOT NULL DEFAULT '',
   corrected_text TEXT,
@@ -94,6 +104,7 @@ CREATE TABLE IF NOT EXISTS settings (
   value_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_lines_page_order ON lines(page_number, reading_order);
+CREATE INDEX IF NOT EXISTS idx_lines_page_position ON lines(page_number, position);
 CREATE INDEX IF NOT EXISTS idx_lines_review ON lines(review_status);
 """
 
@@ -135,21 +146,49 @@ class ProjectDatabase:
 
     def _validate_version(self) -> None:
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version == 1 and PROJECT_SCHEMA_VERSION == 2:
+        if version in (1, 2) and version < PROJECT_SCHEMA_VERSION:
+            # One recovery copy in the original format, so older releases can still open it.
+            backup = self.path.with_name(
+                f"{self.path.stem}.schema-v{version}-backup{self.path.suffix}"
+            )
+            if not backup.exists():
+                self.backup_to(backup)
+        if version == 1:
             self._migrate_v1_to_v2()
             version = 2
+        if version == 2:
+            self._migrate_v2_to_v3()
+            version = 3
         if version != PROJECT_SCHEMA_VERSION:
             self.connection.close()
             raise ValueError(
                 f"Unsupported project schema {version}; this version supports {PROJECT_SCHEMA_VERSION}"
             )
 
+    def _record_schema_version(self, version: int) -> None:
+        self.connection.execute(f"PRAGMA user_version={int(version)}")
+        self.connection.execute(
+            "INSERT INTO project_info(key,value) VALUES('schema_version',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(version),),
+        )
+
+    def _migrate_v2_to_v3(self) -> None:
+        """Add a reviewer-editable reading order that starts as the detected order."""
+
+        with self.connection:
+            self.connection.execute(
+                "ALTER TABLE lines ADD COLUMN position INTEGER NOT NULL DEFAULT 0"
+            )
+            self.connection.execute("UPDATE lines SET position=reading_order")
+            self.connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_lines_page_position ON lines(page_number, position)"
+            )
+            self._record_schema_version(3)
+
     def _migrate_v1_to_v2(self) -> None:
         """Add rich review annotations and deskew geometry without losing v1 work."""
 
-        backup = self.path.with_name(f"{self.path.stem}.schema-v1-backup{self.path.suffix}")
-        if not backup.exists():
-            self.backup_to(backup)
         with self.connection:
             self.connection.execute(
                 "ALTER TABLE pages ADD COLUMN deskew_angle REAL NOT NULL DEFAULT 0"
@@ -160,12 +199,7 @@ class ProjectDatabase:
             self.connection.execute(
                 "ALTER TABLE lines ADD COLUMN polygon_json TEXT NOT NULL DEFAULT '[]'"
             )
-            self.connection.execute(f"PRAGMA user_version={PROJECT_SCHEMA_VERSION}")
-            self.connection.execute(
-                "INSERT INTO project_info(key,value) VALUES('schema_version',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (str(PROJECT_SCHEMA_VERSION),),
-            )
+            self._record_schema_version(2)
 
     def close(self) -> None:
         if self.connection is not None:
@@ -286,9 +320,12 @@ class ProjectDatabase:
         now = utc_now()
         with self.connection:
             self.connection.execute(
-                """INSERT INTO lines(page_number,reading_order,x,y,width,height,machine_text,confidence,
+                # Lines of a page are stored in detected order, so a new line's detected
+                # number is also the next free reading position, even after a reviewer
+                # rearranged the lines stored before an interruption.
+                """INSERT INTO lines(page_number,reading_order,position,x,y,width,height,machine_text,confidence,
                    token_probabilities_json,token_ids_json,truncated,recognition_error,polygon_json,created_at,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(page_number,reading_order) DO UPDATE SET x=excluded.x,y=excluded.y,
                    width=excluded.width,height=excluded.height,machine_text=excluded.machine_text,
                    confidence=excluded.confidence,token_probabilities_json=excluded.token_probabilities_json,
@@ -298,6 +335,7 @@ class ProjectDatabase:
                    WHERE lines.machine_text='' AND lines.corrected_text IS NULL""",
                 (
                     page_number,
+                    reading_order,
                     reading_order,
                     bbox.x,
                     bbox.y,
@@ -328,8 +366,56 @@ class ProjectDatabase:
         if page_number is not None:
             query += " WHERE page_number=?"
             arguments = (page_number,)
-        query += " ORDER BY page_number,reading_order"
+        query += " ORDER BY page_number,position,reading_order"
         return [self._stored_line(row) for row in self.connection.execute(query, arguments)]
+
+    def tagged_lines(self) -> list[StoredLine]:
+        """Lines that carry at least one tag, in document and reading order."""
+
+        rows = self.connection.execute(
+            """SELECT * FROM lines WHERE annotations_json LIKE '%"tag"%'
+               ORDER BY page_number,position,reading_order"""
+        )
+        lines = [self._stored_line(row) for row in rows]
+        return [
+            line
+            for line in lines
+            if any(isinstance(item, dict) and item.get("kind") == "tag" for item in line.annotations)
+        ]
+
+    def set_line_order(self, page_number: int, line_ids: list[int]) -> None:
+        """Store a page's reading order; lines not listed keep their order after them.
+
+        Accepting a partial list keeps a reorder valid while live transcription adds
+        lines to the same page between the list being shown and the drop.
+        """
+
+        current = [line.id for line in self.lines(page_number)]
+        requested = list(dict.fromkeys(int(line_id) for line_id in line_ids))
+        unknown = set(requested) - set(current)
+        if unknown:
+            raise ValueError(f"Lines {sorted(unknown)} are not on page {page_number}")
+        ordered = requested + [line_id for line_id in current if line_id not in set(requested)]
+        with self.connection:
+            self.connection.executemany(
+                "UPDATE lines SET position=? WHERE id=?",
+                [(position, line_id) for position, line_id in enumerate(ordered)],
+            )
+
+    def reset_line_order(self, page_number: int) -> None:
+        """Return a page to the order in which its lines were detected."""
+
+        with self.connection:
+            self.connection.execute(
+                "UPDATE lines SET position=reading_order WHERE page_number=?", (page_number,)
+            )
+
+    def line_order_changed(self, page_number: int) -> bool:
+        row = self.connection.execute(
+            "SELECT 1 FROM lines WHERE page_number=? AND position!=reading_order LIMIT 1",
+            (page_number,),
+        ).fetchone()
+        return row is not None
 
     @staticmethod
     def _stored_line(row: sqlite3.Row) -> StoredLine:
@@ -339,6 +425,7 @@ class ProjectDatabase:
             id=row["id"],
             page_number=row["page_number"],
             reading_order=row["reading_order"],
+            position=row["position"],
             bbox=BoundingBox(row["x"], row["y"], row["width"], row["height"]),
             machine_text=row["machine_text"],
             corrected_text=row["corrected_text"],

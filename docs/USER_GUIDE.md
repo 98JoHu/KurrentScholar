@@ -24,13 +24,44 @@ Drag the divider between the line list and transcription editor to give the edit
 The text-size control is remembered across launches. Select text and use `x²` / `x₂` (or
 **Ctrl+.** / **Ctrl+,**) for superscript and subscript. The special-character menu includes German
 letters and common archival signs; normal Unicode keyboard input is preserved. Highlight applies a visual
-mark. Tag applies a named color to a word or selection; Person, Place, Organization, Date, Unclear, and
-custom labels are available. These ranges are stored in the project and included in rich/structured
-exports. Plain-text export deliberately contains only the characters.
+mark. **Clear format** removes highlights, tags, superscript, and subscript from the selection.
 
-Opening a version-1 project in KurrentScholar 1.1 upgrades its schema once. Before changing the original,
-the application creates a sibling file named `.schema-v1-backup.ksproj`; keep that recovery copy until the
-upgraded project has been checked.
+### Tags
+
+Tags record what a word is: Person, Place, Organization, Date, Unclear, or a name you type yourself. Select
+the words (or place the cursor inside a single word) and press **Tag…** (**Ctrl+Shift+G**), or right-click
+the word and choose **Tag as**. Names you have used before in the project are offered again, so a custom tag
+such as "Pfarrer" keeps one spelling and one color.
+
+A tag's name is shown as a small colored label directly after the tagged words in the line list. In the
+editor, tagged words are colored and underlined; hovering shows the tag, and the row below the editor
+lists the line's tags. Click a listed tag to select its words, or **✕** to remove it; right-clicking a
+tagged word also offers **Remove tag**. Typing directly after a tagged word does not extend the tag, while
+corrections inside the tagged words remain part of it.
+
+**Review > Tags in project…** lists every tag with its words, page, and line. Filter by tag or search the
+tagged text, and double-click a row to open the line with the tagged words selected. Word exports show each
+tag's name after its words in the tag's color; CSV and Excel name the tagged words (for example
+`Person: Matthias Müller; Place: Wien`); JSON lists each tag with its text and character offsets. Plain-text
+export deliberately contains only the characters.
+
+### Reading order
+
+Lines are first listed in the order in which they were detected, top to bottom. When a page should be read
+differently, for example a marginal note after the main text beside it, drag a line to its place in the
+line list, or select it and use **Review > Reading order > Move line up / Move line down**
+(**Alt+↑ / Alt+↓**; macOS: **⌥↑ / ⌥↓**). The same commands are on the line list's right-click menu. The
+numbers in the list, the numbered labels on the page boxes, and every export follow the new order.
+**Restore detected order** returns the page to the detected order, and **View > Show reading order on page**
+hides or shows the numbered labels. Changing the order never changes text, tags, or review status.
+
+### Project upgrades
+
+Opening a project made by an earlier version upgrades its schema once (KurrentScholar 1.1 introduced
+schema 2, and the editable reading order introduced schema 3). Before changing the original, the
+application creates a sibling recovery copy named `.schema-v1-backup.ksproj` or `.schema-v2-backup.ksproj`
+that the earlier version can still open; keep it until the upgraded project has been checked. Older
+versions cannot open an upgraded project.
 
 Use **Recognition model** to inspect or change the checkpoint assigned to a project. Existing projects
 retain their recorded checkpoint. Changing a processed project first creates a separate backup and then
@@ -47,10 +78,10 @@ Corrections and review decisions remain available in that backup but are not aut
 to changed line geometry.
 
 The top-level **Export** menu provides all output formats. Exports can use corrected or
-machine text and retain page/line information. CSV cells beginning with
+machine text and retain page/line information; line numbers follow the page's reading order. CSV cells beginning with
 spreadsheet formula characters are neutralized. JSON contains model/software provenance and both text
 versions. Word preserves superscript, subscript, highlights, and tags; CSV, Excel, and JSON expose explicit
-tag/annotation fields. DOCX uncertainty is a review aid, not calibrated accuracy.
+tag/annotation fields (see Tags above). DOCX uncertainty is a review aid, not calibrated accuracy.
 
 ## Keyboard shortcuts
 
@@ -66,6 +97,8 @@ The same shortcuts work on Windows and macOS; on a Mac, press **⌘ Command** wh
 | Save | Ctrl+S |
 | Mark selected line verified | Ctrl+Shift+V |
 | Next uncertain line | Ctrl+Shift+N (also F6) |
+| Move selected line up / down in reading order | Alt+↑ / Alt+↓ (macOS: ⌥↑ / ⌥↓) |
+| Tag selected text | Ctrl+Shift+G |
 | Superscript / subscript | Ctrl+. / Ctrl+, (also Ctrl+Shift+= / Ctrl+=) |
 | Clear text formatting | Ctrl+Shift+Space (Windows also Ctrl+Space) |
 | Zoom in / out / fit page | Ctrl++ / Ctrl+- / Ctrl+0 |

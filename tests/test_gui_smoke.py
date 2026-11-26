@@ -488,3 +488,165 @@ def test_review_list_marks_verified_lines_and_skips_them(qtbot, tmp_path):
     assert window.current_line_id == first
     assert "✓" in window.line_list.item(0).text()
     assert window._export_default_path(".txt") == str(tmp_path / "review.txt")
+
+
+def _tag_window(qtbot, tmp_path, texts):
+    from kurrentscholar.domain import BoundingBox
+    from kurrentscholar.projects import ProjectDatabase
+    from kurrentscholar.ui.main_window import MainWindow
+
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"source")
+    project = ProjectDatabase(tmp_path / "tags.ksproj", create=True)
+    project.set_document(source, 1)
+    project.upsert_page(1, 1000, 1500, 300)
+    ids = [
+        project.add_line(1, index, BoundingBox(10, 20 + 60 * index, 300, 40), text, 0.95, [], [])
+        for index, text in enumerate(texts)
+    ]
+    window = MainWindow(offer_model_on_startup=False)
+    qtbot.addWidget(window)
+    window.project = project
+    window.project_path = tmp_path / "tags.ksproj"
+    window._refresh_lines()
+    return window, project, ids
+
+
+def _place_caret(window, start, end=None):
+    from PySide6.QtGui import QTextCursor
+
+    cursor = window.editor.textCursor()
+    cursor.setPosition(start)
+    if end is not None:
+        cursor.setPosition(end, QTextCursor.KeepAnchor)
+    window.editor.setTextCursor(cursor)
+
+
+@pytest.mark.gui
+def test_tag_is_named_at_its_word_in_list_editor_panel_and_tooltip(qtbot, tmp_path):
+    from kurrentscholar.ui.main_window import LINE_HTML_ROLE
+
+    window, project, (line_id,) = _tag_window(qtbot, tmp_path, ["Matthias Müller zu Wien"])
+    window.line_list.setCurrentRow(0)
+    _place_caret(window, 11)  # inside "Müller": the word at the caret is tagged
+    window._apply_tag("Person")
+    window.save_current_edit()
+
+    stored = project.line(line_id)
+    assert [(a["label"], a["start"], a["end"]) for a in stored.annotations if a["kind"] == "tag"] == [
+        ("Person", 9, 15)
+    ]
+    markup = window.line_list.item(0).data(LINE_HTML_ROLE)
+    assert markup.index("Müller") < markup.index("Person") < markup.index("zu Wien")
+    assert "Tags: Person: Müller" in window.line_list.item(0).toolTip()
+    assert "Person" in window.tag_panel.text() and "Müller" in window.tag_panel.text()
+    assert window._project_tag_colors()["Person"]
+
+
+@pytest.mark.gui
+def test_typing_after_a_tag_does_not_extend_it_but_corrections_inside_do(qtbot, tmp_path):
+    window, project, (line_id,) = _tag_window(qtbot, tmp_path, ["Matthias Müller zu Wien"])
+    window.line_list.setCurrentRow(0)
+    _place_caret(window, 9, 15)
+    window._apply_tag("Person")
+    _place_caret(window, 15)
+    qtbot.keyClicks(window.editor, " sen.")  # typed on the keyboard
+    _place_caret(window, 12)
+    window.editor.insertPlainText("l")  # "Mülller" correction within the name
+    window.save_current_edit()
+
+    tags = [a for a in project.line(line_id).annotations if a["kind"] == "tag"]
+    assert [(a["start"], a["end"]) for a in tags] == [(9, 16)]
+    assert project.line(line_id).display_text == "Matthias Mülller sen. zu Wien"
+
+
+@pytest.mark.gui
+def test_selecting_another_line_never_copies_formatting_onto_it(qtbot, tmp_path):
+    window, project, (tagged, plain) = _tag_window(qtbot, tmp_path, ["zu Wien", "ganz andere Zeile"])
+    project.correct_line(
+        tagged, "zu Wien", [{"start": 3, "end": 7, "kind": "tag", "label": "Place", "color": "#C9DDF7"}]
+    )
+    window.line_list.setCurrentRow(0)
+    _place_caret(window, 5)  # caret inside the tagged place name
+    window.line_list.setCurrentRow(1)
+    window.line_list.setCurrentRow(0)
+
+    assert project.line(plain).annotations == []
+    assert window.line_list.currentRow() == 0
+
+
+@pytest.mark.gui
+def test_clear_format_and_tag_removal_really_remove_formatting(qtbot, tmp_path):
+    window, project, (line_id,) = _tag_window(qtbot, tmp_path, ["Matthias Müller zu Wien"])
+    project.correct_line(line_id, "Matthias Müller zu Wien", [
+        {"start": 9, "end": 15, "kind": "tag", "label": "Person", "color": "#F2C7C3"},
+        {"start": 19, "end": 23, "kind": "highlight", "color": "#FFF0A8"},
+        {"start": 0, "end": 2, "kind": "superscript"},
+    ])
+    window._refresh_lines()
+    window.line_list.setCurrentRow(0)
+
+    # A highlight under a tag survives tagging and later removal of that tag.
+    _place_caret(window, 19, 23)
+    window._apply_tag("Place")
+    window._tag_panel_link("remove:1")
+    window.save_current_edit()
+    kinds = {(a["kind"], a.get("label")) for a in project.line(line_id).annotations}
+    assert ("highlight", None) in kinds and ("tag", "Place") not in kinds
+    assert ("tag", "Person") in kinds
+
+    _place_caret(window, 0, len("Matthias Müller zu Wien"))
+    window._clear_selection_format()
+    window.save_current_edit()
+    assert project.line(line_id).annotations == []
+
+
+@pytest.mark.gui
+def test_tag_overview_lists_tags_and_jumps_to_the_tagged_words(qtbot, tmp_path):
+    window, project, (first, second) = _tag_window(qtbot, tmp_path, ["Matthias Müller", "zu Wien"])
+    project.correct_line(second, "zu Wien", [{"start": 3, "end": 7, "kind": "tag", "label": "Place"}])
+    project.correct_line(first, "Matthias Müller", [{"start": 0, "end": 15, "kind": "tag", "label": "Pfarrer"}])
+    window.show_tag_overview()
+    dialog = window._tag_overview
+    assert dialog is not None
+    assert dialog.table.rowCount() == 2
+    assert "Pfarrer" in window._tag_choices()  # custom labels are offered again
+
+    dialog.search.setText("wien")
+    assert dialog.table.rowCount() == 1
+    dialog._jump()
+    assert window.current_line_id == second
+    assert window.editor.textCursor().selectedText() == "Wien"
+    dialog.close()
+    assert window._tag_overview is None
+
+
+@pytest.mark.gui
+def test_reading_order_moves_persist_and_number_the_list_and_page(qtbot, tmp_path):
+    window, project, (first, second, third) = _tag_window(
+        qtbot, tmp_path, ["forderung und Gegen", "Aul. No 1-6", "forderung betreffend"]
+    )
+    window.line_list.setCurrentRow(2)
+    window.actions["Move line up"].trigger()
+
+    assert [line.id for line in project.lines(1)] == [first, third, second]
+    assert window.current_line_id == third
+    assert window.line_list.currentRow() == 1
+    assert window.line_list.item(1).text().startswith("002")
+    badges = {
+        overlay.data(0): overlay.childItems()[0].childItems()[0].text()
+        for overlay in window._overlays
+    }
+    assert badges == {first: "1", third: "2", second: "3"}
+
+    # A drag-and-drop reorder stores whatever order the list shows.
+    item = window.line_list.takeItem(0)
+    window.line_list.insertItem(2, item)
+    window._store_list_order()
+    assert [line.id for line in project.lines(1)] == [third, second, first]
+
+    window.actions["Restore detected order"].trigger()
+    assert [line.id for line in project.lines(1)] == [first, second, third]
+
+    window._set_show_reading_order(False)
+    assert all(not overlay.childItems() for overlay in window._overlays)

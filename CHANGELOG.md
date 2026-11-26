@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+- Added an editable reading order. Drag a line in the line list, or use **Review > Reading order > Move
+  line up/down** (Alt/⌥+↑/↓), for example to read a marginal note after the main text beside it. Line boxes
+  on the page are numbered in reading order (**View > Show reading order on page**), every export follows
+  it, and **Restore detected order** undoes it. The detector's own numbering is kept separately, so
+  resuming an interrupted transcription still matches lines correctly.
+- Project schema 3 stores the reading order. Schema-2 projects are upgraded on opening after a sibling
+  `.schema-v2-backup.ksproj` recovery copy is written; KurrentScholar 1.1.x cannot open upgraded projects.
+- Tags are now shown at the exact words: the line list names each tag in a colored label right after its
+  words, the editor underlines tagged words and names them on hover, and a row below the editor lists the
+  line's tags (click to select, ✕ to remove). **Review > Tags in project…** lists, filters, and searches all
+  tags and opens the tagged words. Tagging is available on right-click and with Ctrl/⌘+Shift+G; custom tag
+  names are offered again, and custom tags no longer borrow a predefined tag's color. Unclear is no longer
+  the same yellow as a highlight.
+- Fixed formatting leaking between lines: with the caret inside a tagged, highlighted, or superscript word,
+  selecting another line applied that formatting to the entire other line and saved it on leaving.
+- Fixed **Clear format** leaving tags and highlights in place, and typing right after a tagged word
+  extending the tag to the new text. A highlight now survives tagging and later removal of the tag.
+- Exports name tags at their words: Word shows the tag's name after the tagged words in its color; CSV and
+  Excel list `Tag: words` instead of only tag names; JSON adds a `tags` list with text and offsets. Line
+  numbers in exports follow the reading order.
+
 ## 1.1.3 — 2026-11-26
 
 - Fixed line detection merging two to four neighbouring lines into one box on densely written pages. Weak

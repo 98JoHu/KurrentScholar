@@ -3,6 +3,8 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -262,6 +264,98 @@ class TutorialOverlay(QWidget):
         self.hide()
         self.finished.emit()
         self.deleteLater()
+
+
+class TagOverviewDialog(QDialog):
+    """Every tag in the project, filterable, with a jump to the tagged words."""
+
+    jump_requested = Signal(object)
+
+    def __init__(self, entries: list[dict], parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Tags in project")
+        self.resize(640, 460)
+        self.entries = entries
+        self.label_filter = QComboBox()
+        self.label_filter.addItem("All tags")
+        for label in dict.fromkeys(entry["label"] for entry in sorted(entries, key=lambda e: e["label"].casefold())):
+            self.label_filter.addItem(label)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search tagged text")
+        self.search.setClearButtonEnabled(True)
+        filters = QHBoxLayout()
+        filters.addWidget(self.label_filter)
+        filters.addWidget(self.search, 1)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Tag", "Tagged text", "Page", "Line"])
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.verticalHeader().hide()
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table.itemActivated.connect(lambda _item: self._jump())
+        self.summary = QLabel()
+        self.summary.setObjectName("contextStatus")
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        self.go_button = buttons.addButton("Go to tagged words", QDialogButtonBox.ActionRole)
+        self.go_button.clicked.connect(self._jump)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addLayout(filters)
+        layout.addWidget(self.table, 1)
+        layout.addWidget(self.summary)
+        layout.addWidget(buttons)
+        self.label_filter.currentIndexChanged.connect(self._populate)
+        self.search.textChanged.connect(self._populate)
+        self._populate()
+
+    def _visible_entries(self) -> list[dict]:
+        label = self.label_filter.currentText() if self.label_filter.currentIndex() > 0 else None
+        needle = self.search.text().strip().casefold()
+        return [
+            entry
+            for entry in self.entries
+            if (label is None or entry["label"] == label)
+            and (not needle or needle in entry["text"].casefold())
+        ]
+
+    def _populate(self) -> None:
+        visible = self._visible_entries()
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(len(visible))
+        for row, entry in enumerate(visible):
+            tag = QTableWidgetItem(entry["label"])
+            tag.setBackground(QColor(entry["color"]))
+            tag.setData(Qt.UserRole, entry)
+            page = QTableWidgetItem()
+            page.setData(Qt.DisplayRole, int(entry["page"]))
+            line = QTableWidgetItem()
+            line.setData(Qt.DisplayRole, int(entry["line"]))
+            for column, item in enumerate((tag, QTableWidgetItem(entry["text"]), page, line)):
+                self.table.setItem(row, column, item)
+        self.table.setSortingEnabled(True)
+        if visible:
+            self.table.selectRow(0)
+        total = len(self.entries)
+        if not total:
+            self.summary.setText(
+                "No tags yet. In the editor, select a word and choose Tag…, or right-click it."
+            )
+        else:
+            self.summary.setText(
+                f"{len(visible)} of {total} tag(s). Double-click a row to open the tagged words."
+            )
+        self.go_button.setEnabled(bool(visible))
+
+    def _jump(self) -> None:
+        row = self.table.currentRow()
+        item = self.table.item(row, 0) if row >= 0 else None
+        if item is not None:
+            self.jump_requested.emit(item.data(Qt.UserRole))
 
 
 class GroundTruthDialog(QDialog):

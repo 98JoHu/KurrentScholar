@@ -70,8 +70,10 @@ def test_v1_project_migrates_annotations_and_deskew_columns_transactionally(tmp_
     connection.close()
 
     with ProjectDatabase(path) as project:
-        assert project.connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert project.connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert project.info()["schema_version"] == "3"
         assert project.page(1)["deskew_angle"] == 0
+        assert project.line(1).position == 0
         assert project.line(1).annotations == []
         assert project.line(1).polygon == []
     backup = tmp_path / "legacy.schema-v1-backup.ksproj"
@@ -163,20 +165,24 @@ def test_exports_are_utf8_structured_and_csv_safe(tmp_path):
     with table.open(encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.reader(stream))
     assert rows[1][3] == "'=machine"
-    assert rows[1][12] == "Place"
+    assert rows[1][12] == "Place: Straße"
     assert word.stat().st_size > 0
     from docx import Document
 
     word_document = Document(word)
     assert any(run.font.subscript for paragraph in word_document.paragraphs for run in paragraph.runs)
-    assert any("Tags: Place" in paragraph.text for paragraph in word_document.paragraphs)
+    # The tag's name follows the tagged word itself.
+    assert any("Straße[Place]" in paragraph.text for paragraph in word_document.paragraphs)
+    assert payload["lines"][0]["tags"] == [
+        {"label": "Place", "text": "Straße", "start": 4, "end": 10}
+    ]
     from openpyxl import load_workbook
 
     workbook = load_workbook(excel, read_only=True, data_only=False)
     assert workbook.sheetnames == ["Transcription", "Summary", "Provenance"]
     assert workbook["Transcription"]["D2"].value == "'=machine"
     assert workbook["Transcription"]["F2"].value == "H2O Straße"
-    assert workbook["Transcription"]["O2"].value == "Place"
+    assert workbook["Transcription"]["O2"].value == "Place: Straße"
     assert workbook["Provenance"]["B6"].value == project.document()["sha256"]
     workbook.close()
     import zipfile
@@ -204,3 +210,95 @@ def test_relink_accepts_only_the_same_source_bytes(tmp_path):
         project.relink_document(different)
     project.close()
 
+
+
+def test_v2_project_gains_editable_reading_order_with_backup(tmp_path):
+    path, project, line_id = make_project(tmp_path)
+    second = project.add_line(1, 1, BoundingBox(10, 80, 300, 40), "zweite", 0.9, [], [])
+    project.close()
+    # Recreate the layout written by KurrentScholar 1.1.x (schema 2, no position column).
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        DROP INDEX idx_lines_page_position;
+        ALTER TABLE lines DROP COLUMN position;
+        PRAGMA user_version=2;
+        UPDATE project_info SET value='2' WHERE key='schema_version';
+        """
+    )
+    connection.close()
+
+    with ProjectDatabase(path) as migrated:
+        assert migrated.connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert [(line.id, line.position) for line in migrated.lines()] == [(line_id, 0), (second, 1)]
+    backup = tmp_path / "research.schema-v2-backup.ksproj"
+    connection = sqlite3.connect(backup)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+    connection.close()
+
+
+def test_reading_order_can_be_changed_restored_and_survives_resumed_transcription(tmp_path):
+    path, project, first = make_project(tmp_path)
+    second = project.add_line(1, 1, BoundingBox(10, 80, 300, 40), "Randnotiz", 0.9, [], [])
+    third = project.add_line(1, 2, BoundingBox(400, 80, 300, 40), "Haupttext", 0.9, [], [])
+
+    project.set_line_order(1, [first, third, second])
+    assert [line.id for line in project.lines(1)] == [first, third, second]
+    assert [line.position for line in project.lines(1)] == [0, 1, 2]
+    assert project.line_order_changed(1)
+    # The detector's numbering is untouched, so re-running the page still matches lines.
+    assert project.line(third).reading_order == 2
+
+    # A line transcribed after the change (e.g. after cancelling) is appended.
+    fourth = project.add_line(1, 3, BoundingBox(10, 140, 300, 40), "vierte", 0.9, [], [])
+    # A partial order (list shown before the fourth line arrived) keeps later lines after it.
+    project.set_line_order(1, [third, first, second])
+    assert [line.id for line in project.lines(1)] == [third, first, second, fourth]
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        project.set_line_order(1, [first, 9999])
+
+    table = tmp_path / "ordered.csv"
+    export_csv(project, table)
+    with table.open(encoding="utf-8-sig", newline="") as stream:
+        rows = list(csv.reader(stream))
+    assert [(row[2], row[4] or row[3]) for row in rows[1:]] == [
+        ("1", "Haupttext"), ("2", "'=machine"), ("3", "Randnotiz"), ("4", "vierte"),
+    ]
+    text = tmp_path / "ordered.txt"
+    export_text(project, text)
+    assert text.read_text("utf-8").index("Haupttext") < text.read_text("utf-8").index("Randnotiz")
+
+    project.reset_line_order(1)
+    assert [line.id for line in project.lines(1)] == [first, second, third, fourth]
+    assert not project.line_order_changed(1)
+    project.close()
+
+
+def test_tagged_lines_lists_only_lines_with_tags(tmp_path):
+    _, project, line_id = make_project(tmp_path)
+    other = project.add_line(1, 1, BoundingBox(10, 80, 300, 40), "ohne Markierung", 0.9, [], [])
+    project.correct_line(other, "ohne Markierung", [{"start": 0, "end": 4, "kind": "highlight"}])
+    project.correct_line(line_id, "Müller", [{"start": 0, "end": 6, "kind": "tag", "label": "Person"}])
+    assert [line.id for line in project.tagged_lines()] == [line_id]
+    project.close()
+
+
+def test_word_tag_shading_respects_run_property_order(tmp_path):
+    _, project, line_id = make_project(tmp_path)
+    project.correct_line(line_id, "Dr. Müller", [
+        {"start": 0, "end": 3, "kind": "superscript"},
+        {"start": 0, "end": 10, "kind": "tag", "label": "Person"},
+    ])
+    word = tmp_path / "tags.docx"
+    export_docx(project, word)
+    from docx import Document
+
+    paragraph = next(p for p in Document(word).paragraphs if "Dr." in p.text)
+    assert "Dr. Müller[Person]" in paragraph.text
+    first = paragraph.runs[0]._element.rPr
+    tags = [child.tag.rsplit("}", 1)[1] for child in first]
+    assert tags.index("shd") < tags.index("vertAlign")
+    project.close()

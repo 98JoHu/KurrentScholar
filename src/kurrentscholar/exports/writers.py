@@ -6,6 +6,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from kurrentscholar import __version__
+from kurrentscholar.annotations import styled_segments, tag_spans, tag_summary, tag_text_color
 from kurrentscholar.constants import DEFAULT_MODEL, PROJECT_SCHEMA_VERSION, find_model
 from kurrentscholar.domain import ConfidenceThresholds
 from kurrentscholar.projects import ProjectDatabase
@@ -36,41 +37,28 @@ def _model_provenance(project: ProjectDatabase) -> dict[str, str | None]:
     }
 
 
-def _tag_labels(line) -> str:
-    return "; ".join(
-        dict.fromkeys(
-            str(annotation.get("label", "Tag"))
-            for annotation in line.annotations
-            if annotation.get("kind") == "tag"
-        )
+def _tags(line) -> str:
+    """Name each tag with its words, e.g. ``Person: Matthias Müller; Place: Wien``."""
+
+    return tag_summary(line.display_text, line.annotations)
+
+
+def _shade(run, color: str) -> None:
+    """Give a Word run the tag's exact background color (highlights allow only 16)."""
+
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    shading = OxmlElement("w:shd")
+    shading.set(qn("w:val"), "clear")
+    shading.set(qn("w:color"), "auto")
+    shading.set(qn("w:fill"), color.lstrip("#").upper())
+    # Word requires run properties in schema order; w:shd precedes these elements.
+    run._element.get_or_add_rPr().insert_element_before(
+        shading,
+        "w:fitText", "w:vertAlign", "w:rtl", "w:cs", "w:em", "w:lang",
+        "w:eastAsianLayout", "w:specVanish", "w:oMath",
     )
-
-
-def _styled_segments(text: str, annotations: list[dict]) -> list[tuple[str, list[dict]]]:
-    """Split text at annotation boundaries so overlapping styles survive DOCX export."""
-
-    valid: list[dict] = []
-    boundaries = {0, len(text)}
-    for annotation in annotations:
-        try:
-            start = max(0, min(len(text), int(annotation["start"])))
-            end = max(start, min(len(text), int(annotation["end"])))
-        except (KeyError, TypeError, ValueError):
-            continue
-        if start == end:
-            continue
-        normalized = {**annotation, "start": start, "end": end}
-        valid.append(normalized)
-        boundaries.update((start, end))
-    positions = sorted(boundaries)
-    return [
-        (
-            text[start:end],
-            [item for item in valid if int(item["start"]) <= start and int(item["end"]) >= end],
-        )
-        for start, end in zip(positions, positions[1:], strict=False)
-        if start < end
-    ]
 
 
 def export_text(project: ProjectDatabase, destination: str | Path) -> None:
@@ -99,10 +87,10 @@ def export_csv(project: ProjectDatabase, destination: str | Path) -> None:
         )
         for line in project.lines():
             writer.writerow([_safe_csv(value) for value in (
-                document.get("filename", ""), line.page_number, line.reading_order + 1, line.machine_text,
+                document.get("filename", ""), line.page_number, line.position + 1, line.machine_text,
                 line.corrected_text if line.corrected_text is not None else "",
                 line.confidence, line.review_status, line.bbox.x, line.bbox.y,
-                line.bbox.width, line.bbox.height, line.notes, _tag_labels(line),
+                line.bbox.width, line.bbox.height, line.notes, _tags(line),
                 json.dumps(line.annotations, ensure_ascii=False),
                 json.dumps(line.polygon, ensure_ascii=False),
             )])
@@ -130,6 +118,10 @@ def export_json(project: ProjectDatabase, destination: str | Path) -> None:
                 "bbox": asdict(line.bbox),
                 "effective_text": line.display_text,
                 "verified": line.review_status == "verified",
+                "tags": [
+                    {"label": span.label, "text": span.text, "start": span.start, "end": span.end}
+                    for span in tag_spans(line.display_text, line.annotations)
+                ],
             }
             for line in project.lines()
         ],
@@ -140,6 +132,7 @@ def export_json(project: ProjectDatabase, destination: str | Path) -> None:
 def export_docx(project: ProjectDatabase, destination: str | Path) -> None:
     from docx import Document
     from docx.enum.text import WD_COLOR_INDEX
+    from docx.shared import RGBColor
 
     document = Document()
     document.add_heading("Transcription", 0)
@@ -147,44 +140,37 @@ def export_docx(project: ProjectDatabase, destination: str | Path) -> None:
     thresholds = ConfidenceThresholds()
     colors = {"moderate": WD_COLOR_INDEX.YELLOW, "high_uncertainty": WD_COLOR_INDEX.DARK_YELLOW,
               "very_high_uncertainty": WD_COLOR_INDEX.RED}
-    tag_colors = {
-        "Person": WD_COLOR_INDEX.PINK,
-        "Place": WD_COLOR_INDEX.TURQUOISE,
-        "Organization": WD_COLOR_INDEX.VIOLET,
-        "Date": WD_COLOR_INDEX.BRIGHT_GREEN,
-        "Unclear": WD_COLOR_INDEX.YELLOW,
-    }
     for line in project.lines():
         if line.page_number != current_page:
             document.add_heading(f"Page {line.page_number}", level=1)
             current_page = line.page_number
         paragraph = document.add_paragraph()
-        for segment, segment_annotations in _styled_segments(line.display_text, line.annotations):
+        text = line.display_text
+        spans = tag_spans(text, line.annotations)
+        position = 0
+        for segment, segment_annotations in styled_segments(text, line.annotations):
+            position += len(segment)
             run = paragraph.add_run(segment)
             kinds = {str(annotation.get("kind")) for annotation in segment_annotations}
             run.font.superscript = "superscript" in kinds
             run.font.subscript = "subscript" in kinds
-            tag = next(
-                (
-                    annotation
-                    for annotation in segment_annotations
-                    if annotation.get("kind") == "tag"
-                ),
-                None,
-            )
+            tag = next((span for span in spans if span.start < position <= span.end), None)
             if tag:
-                run.font.highlight_color = tag_colors.get(
-                    str(tag.get("label")), WD_COLOR_INDEX.YELLOW
-                )
+                _shade(run, tag.color)
             elif "highlight" in kinds:
                 run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+            # The tag's name follows its words, so a reader sees what was tagged where.
+            for span in spans:
+                if span.end == position:
+                    label_run = paragraph.add_run(f"[{span.label}]")
+                    label_run.font.superscript = True
+                    label_run.font.color.rgb = RGBColor.from_string(
+                        tag_text_color(span.color).lstrip("#")
+                    )
         label = thresholds.classify(line.confidence).value
         marker = paragraph.add_run(f" [{label.replace('_', ' ')}]")
         if label in colors:
             marker.font.highlight_color = colors[label]
-        tags = _tag_labels(line)
-        if tags:
-            paragraph.add_run(f" [Tags: {tags}]").italic = True
     model = _model_provenance(project)
     doi = f", doi:{model['model_doi']}" if model["model_doi"] else ""
     document.add_paragraph(
@@ -218,7 +204,7 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
         transcript.append([
             _safe_xlsx(document.get("filename", "")),
             line.page_number,
-            line.reading_order + 1,
+            line.position + 1,
             _safe_xlsx(line.machine_text),
             _safe_xlsx(line.corrected_text if line.corrected_text is not None else ""),
             _safe_xlsx(line.display_text),
@@ -230,7 +216,7 @@ def export_xlsx(project: ProjectDatabase, destination: str | Path) -> None:
             line.bbox.width,
             line.bbox.height,
             _safe_xlsx(line.notes),
-            _safe_xlsx(_tag_labels(line)),
+            _safe_xlsx(_tags(line)),
             _safe_xlsx(json.dumps(line.annotations, ensure_ascii=False)),
             _safe_xlsx(json.dumps(line.polygon, ensure_ascii=False)),
         ])

@@ -67,7 +67,8 @@ offline.
 - Local TrOCR inference with pinned model revisions, safetensors integrity checks, beam-search confidence
   evidence, and CPU-safe defaults.
 - Live page-scoped transcription, cancellation, direct page navigation, synchronized polygon overlays,
-  a resizable editor, rich corrections and word tags, correction history, and human verification.
+  a resizable editor, rich corrections, word tags named at their words with a project-wide tag list,
+  an adjustable reading order, correction history, and human verification.
 - Default-on Auto Save and schema-versioned SQLite projects that preserve machine output separately from
   edited text.
 - A model manager showing installed, partial, or damaged models and disk use, with repair and safe removal.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import logging
 import sys
@@ -9,29 +10,50 @@ from pathlib import Path
 from statistics import median
 
 from PIL.ImageQt import ImageQt
-from PySide6.QtCore import QObject, QPointF, QRectF, QSettings, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QPointF,
+    QRectF,
+    QSettings,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import (
+    QAbstractTextDocumentLayout,
     QAction,
     QBrush,
     QColor,
+    QFont,
     QKeySequence,
     QPainter,
+    QPalette,
     QPen,
     QPixmap,
     QPolygonF,
     QTextCharFormat,
     QTextCursor,
+    QTextDocument,
     QTextFormat,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
     QFileDialog,
     QGraphicsPixmapItem,
     QGraphicsPolygonItem,
+    QGraphicsRectItem,
     QGraphicsScene,
+    QGraphicsSimpleTextItem,
     QGraphicsView,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -41,14 +63,30 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTextEdit,
     QToolBar,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
 
 from kurrentscholar import __version__
+from kurrentscholar.annotations import (
+    HIGHLIGHT_COLOR,
+    TAG_COLORS,
+    TagSpan,
+    annotated_html,
+    custom_tag_color,
+    tag_color,
+    tag_label_html,
+    tag_spans,
+    tag_summary,
+    tag_text_color,
+)
 from kurrentscholar.constants import (
     APP_NAME,
     DEFAULT_MODEL,
@@ -74,6 +112,7 @@ from kurrentscholar.segmentation import ProjectionSegmenter
 from kurrentscholar.ui.dialogs import (
     GroundTruthDialog,
     ModelManagerDialog,
+    TagOverviewDialog,
     TutorialOverlay,
 )
 
@@ -83,18 +122,12 @@ TAG_PROPERTY = QTextFormat.UserProperty + 1
 TAG_COLOR_PROPERTY = QTextFormat.UserProperty + 2
 HIGHLIGHT_PROPERTY = QTextFormat.UserProperty + 3
 NEEDS_REVIEW_ROLE = Qt.UserRole + 1
+LINE_HTML_ROLE = Qt.UserRole + 2
 CONFIDENCE_COLORS = {
     "moderate": "#FFF0C2",
     "high_uncertainty": "#F7D8C4",
     "very_high_uncertainty": "#F2B8B5",
     "unavailable": "#E5E8EB",
-}
-TAG_COLORS = {
-    "Person": "#F2C7C3",
-    "Place": "#C9DDF7",
-    "Organization": "#DDD0F2",
-    "Date": "#CDE8D2",
-    "Unclear": "#FFE7A8",
 }
 # Qt maps "Ctrl" to the Command key on macOS. Shortcuts avoid keys that are reserved
 # by macOS (Cmd+Space), need Fn on Mac keyboards (F-keys), or need Shift on German
@@ -105,6 +138,10 @@ SHORTCUTS: dict[str, tuple[str, ...]] = {
     "subscript": ("Ctrl+,", "Ctrl+="),
     "clear_format": ("Ctrl+Shift+Space", "Ctrl+Space"),
     "next_uncertain": ("Ctrl+Shift+N", "F6"),
+    "tag": ("Ctrl+Shift+G",),
+    # Alt (Option) with the arrows is unused by text fields on Windows and macOS.
+    "move_line_up": ("Alt+Up",),
+    "move_line_down": ("Alt+Down",),
 }
 
 
@@ -121,15 +158,32 @@ SPECIAL_CHARACTERS = (
 
 
 class LineListWidget(QListWidget):
-    """Line list that reports hover changes for synchronized page highlighting."""
+    """Line list that reports hover changes and lets reviewers drag lines into reading order."""
 
     line_hovered = Signal(object)
+    order_changed = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
         self._last_hovered_id: int | None = None
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDefaultDropAction(Qt.MoveAction)
+        # Rows wrap so the whole line, including its tag names, stays readable.
+        self.setWordWrap(True)
+        self.setResizeMode(QListView.Adjust)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setItemDelegate(LineItemDelegate(self))
+
+    def dropEvent(self, event) -> None:
+        if event.source() is not self:
+            event.ignore()
+            return
+        super().dropEvent(event)
+        # Rebuilding the list inside the drag's own event handling is unsafe; store the
+        # new order once the drop has fully completed.
+        QTimer.singleShot(0, self.order_changed.emit)
 
     def mouseMoveEvent(self, event) -> None:
         item = self.itemAt(event.position().toPoint())
@@ -144,6 +198,169 @@ class LineListWidget(QListWidget):
             self._last_hovered_id = None
             self.line_hovered.emit(None)
         super().leaveEvent(event)
+
+
+class LineItemDelegate(QStyledItemDelegate):
+    """Draws a listed line as rich text so tags appear, named, at their words."""
+
+    def _document(self, option: QStyleOptionViewItem, markup: str, width: int) -> QTextDocument:
+        document = QTextDocument()
+        document.setDefaultFont(option.font)
+        document.setHtml(f'<p style="margin:0; white-space:pre-wrap;">{markup}</p>')
+        document.setTextWidth(max(80, width))
+        return document
+
+    def _width(self, option: QStyleOptionViewItem) -> int:
+        view = self.parent()
+        if isinstance(view, QListWidget):
+            return view.viewport().width() - 2 * view.spacing() - 2
+        return option.rect.width()
+
+    def sizeHint(self, option, index) -> QSize:
+        markup = index.data(LINE_HTML_ROLE)
+        if not markup:
+            return super().sizeHint(option, index)
+        width = self._width(option)
+        document = self._document(option, markup, width)
+        return QSize(width, int(document.size().height()) + 2)
+
+    def paint(self, painter, option, index) -> None:
+        markup = index.data(LINE_HTML_ROLE)
+        if not markup:
+            super().paint(painter, option, index)
+            return
+        styled = QStyleOptionViewItem(option)
+        self.initStyleOption(styled, index)
+        styled.text = ""
+        widget = styled.widget
+        style = widget.style() if widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, styled, painter, widget)
+        document = self._document(styled, markup, styled.rect.width())
+        painter.save()
+        painter.translate(styled.rect.topLeft())
+        painter.setClipRect(QRectF(0, 0, styled.rect.width(), styled.rect.height()))
+        context = QAbstractTextDocumentLayout.PaintContext()
+        context.palette.setColor(QPalette.Text, QColor("#20252B"))
+        document.documentLayout().draw(painter, context)
+        painter.restore()
+
+
+class TranscriptionEditor(QTextEdit):
+    """Line editor that names tags on hover and keeps tags on the words they were given to.
+
+    Qt gives newly typed text the format of the character before the caret, so typing
+    right after a tagged name would silently extend the tag to the next word.
+    """
+
+    context_menu_extender = None  # callable(menu, cursor) installed by the main window
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.cursorPositionChanged.connect(self._end_tag_at_caret)
+
+    @staticmethod
+    def _tag_at(cursor: QTextCursor) -> str | None:
+        formatting = cursor.charFormat()
+        return str(formatting.property(TAG_PROPERTY)) if formatting.hasProperty(TAG_PROPERTY) else None
+
+    def _end_tag_at_caret(self) -> None:
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            return
+        label = self._tag_at(cursor)
+        if label is None:
+            return
+        following = QTextCursor(cursor)
+        if not following.atBlockEnd():
+            following.movePosition(QTextCursor.NextCharacter)
+            if self._tag_at(following) == label:
+                return  # inside the tagged words: corrections stay part of the tag
+        self.setCurrentCharFormat(untagged_format(cursor.charFormat()))
+
+    # Re-placing the caret without moving it resets the insertion format without a
+    # cursorPositionChanged signal, so every way of inserting text checks again.
+    def keyPressEvent(self, event) -> None:
+        if event.text() and event.text().isprintable():
+            self._end_tag_at_caret()
+        super().keyPressEvent(event)
+
+    def inputMethodEvent(self, event) -> None:
+        if event.commitString():
+            self._end_tag_at_caret()
+        super().inputMethodEvent(event)
+
+    def insertFromMimeData(self, source) -> None:
+        self._end_tag_at_caret()
+        super().insertFromMimeData(source)
+
+    def insertPlainText(self, text: str) -> None:
+        self._end_tag_at_caret()
+        super().insertPlainText(text)
+
+    def prepare_insertion(self) -> None:
+        self._end_tag_at_caret()
+
+    def tag_under(self, position) -> str | None:
+        cursor = self.cursorForPosition(position)
+        label = self._tag_at(cursor)
+        if label is None and not cursor.atBlockEnd():
+            cursor.movePosition(QTextCursor.NextCharacter)
+            label = self._tag_at(cursor)
+        return label
+
+    def viewportEvent(self, event) -> bool:
+        if event.type() == QEvent.ToolTip:
+            label = self.tag_under(event.pos())
+            if label:
+                QToolTip.showText(event.globalPos(), f"Tag: {label}", self.viewport())
+            else:
+                QToolTip.hideText()
+                event.ignore()
+            return True
+        return super().viewportEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        cursor = self.textCursor()
+        clicked = self.cursorForPosition(event.pos())
+        inside_selection = (
+            cursor.hasSelection()
+            and cursor.selectionStart() <= clicked.position() <= cursor.selectionEnd()
+        )
+        if not inside_selection:
+            # Act on the word that was right-clicked, as word processors do.
+            self.setTextCursor(clicked)
+            cursor = clicked
+        menu = self.createStandardContextMenu(event.pos())
+        if callable(self.context_menu_extender):
+            self.context_menu_extender(menu, cursor)
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
+
+def untagged_format(formatting: QTextCharFormat) -> QTextCharFormat:
+    """Copy a character format without its tag (a highlight underneath stays visible)."""
+
+    result = QTextCharFormat(formatting)
+    result.clearProperty(TAG_PROPERTY)
+    result.clearProperty(TAG_COLOR_PROPERTY)
+    result.setFontUnderline(False)
+    result.clearProperty(QTextFormat.TextUnderlineColor)
+    if result.hasProperty(HIGHLIGHT_PROPERTY):
+        result.setBackground(QColor(HIGHLIGHT_COLOR))
+    else:
+        result.clearBackground()
+    return result
+
+
+def tag_format(label: str, color: str) -> QTextCharFormat:
+    formatting = QTextCharFormat()
+    formatting.setBackground(QColor(color))
+    # The underline keeps a tag visible while its words are selected.
+    formatting.setFontUnderline(True)
+    formatting.setUnderlineColor(QColor(tag_text_color(color)))
+    formatting.setProperty(TAG_PROPERTY, label)
+    formatting.setProperty(TAG_COLOR_PROPERTY, color)
+    return formatting
 
 
 class ProcessingWorker(QObject):
@@ -365,6 +582,9 @@ class MainWindow(QMainWindow):
         self._display_scale_y = 1.0
         self._hovered_line_id: int | None = None
         self.autosave_enabled = QSettings().value("editor/autosave", True, type=bool)
+        self.show_reading_order = QSettings().value("view/reading_order", True, type=bool)
+        self._tag_overview: TagOverviewDialog | None = None
+        self._last_tag_label: str | None = None
         self.actions: dict[str, QAction] = {}
         self._overlays: list[QGraphicsPolygonItem] = []
         self._build_ui()
@@ -392,7 +612,11 @@ class MainWindow(QMainWindow):
         self.line_list.setObjectName("lineList")
         self.line_list.currentItemChanged.connect(self._select_line)
         self.line_list.line_hovered.connect(self._hover_line)
-        self.editor = QTextEdit()
+        self.line_list.order_changed.connect(self._store_list_order)
+        self.line_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.line_list.customContextMenuRequested.connect(self._line_list_menu)
+        self.editor = TranscriptionEditor()
+        self.editor.context_menu_extender = self._extend_editor_menu
         self.editor.setObjectName("transcriptionEditor")
         self.editor.setPlaceholderText("Select a line to review or correct its transcription.")
         self.editor.setEnabled(False)
@@ -414,10 +638,15 @@ class MainWindow(QMainWindow):
         highlight.setToolTip("Highlight the selected text")
         highlight.clicked.connect(self._highlight_selection)
         tag = QPushButton("Tag…")
-        tag.setToolTip("Apply a named, colored tag to the selected word or text")
-        tag.clicked.connect(self._tag_selection)
+        tag.setToolTip(
+            "Tag the selected text or the word at the cursor as a person, place, date, … "
+            f"({shortcut_text(SHORTCUTS['tag'][0])}; also on right-click)"
+        )
+        tag.clicked.connect(lambda: self._tag_selection())
         clear_format = QPushButton("Clear format")
-        clear_format.setToolTip("Remove highlighting, tags, superscript and subscript")
+        clear_format.setToolTip(
+            "Remove highlighting, tags, superscript and subscript from the selection"
+        )
         clear_format.clicked.connect(self._clear_selection_format)
         special = QToolButton()
         special.setText("Special character")
@@ -453,6 +682,16 @@ class MainWindow(QMainWindow):
         editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.addLayout(format_row)
         editor_layout.addWidget(self.editor)
+        # Names every tag of the edited line next to its words; click to select or remove.
+        self.tag_panel = QLabel()
+        self.tag_panel.setObjectName("tagPanel")
+        self.tag_panel.setWordWrap(True)
+        self.tag_panel.setTextFormat(Qt.RichText)
+        self.tag_panel.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
+        self.tag_panel.linkActivated.connect(self._tag_panel_link)
+        editor_layout.addWidget(self.tag_panel)
+        self._editor_tags: list[TagSpan] = []
+        self.editor.textChanged.connect(self._update_tag_panel)
         self.status_label = QLabel()
         self.status_label.setObjectName("contextStatus")
         self.status_label.setWordWrap(True)
@@ -506,6 +745,7 @@ class MainWindow(QMainWindow):
             QGraphicsView { margin: 8px 4px 8px 8px; }
             QWidget#reviewCard { background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 18px; }
             QLabel#contextStatus { color: #56616D; padding: 8px 4px; }
+            QLabel#tagPanel { color: #56616D; padding: 4px 2px; }
             QLabel#tutorialHeading { font-size: 24px; font-weight: 700; color: #5E3F3C; }
             QFrame#tutorialCard { background: #FFFFFF; border: 1px solid #D9DEE5; border-radius: 18px; }
             QLabel#tutorialKicker { color: #9A6F6B; font-size: 11px; font-weight: 800; }
@@ -582,7 +822,8 @@ class MainWindow(QMainWindow):
                 "Review results while they arrive",
                 "Recognized lines appear here during transcription. Select or hover over a line to "
                 "highlight its box on the manuscript, correct the text, and mark it verified only "
-                "after comparing it with the image.",
+                "after comparing it with the image. Drag a line up or down to change the reading "
+                "order; the numbers on the page boxes and all exports follow it.",
                 self._tutorial_targets.get("review"),
             ),
             (
@@ -598,7 +839,9 @@ class MainWindow(QMainWindow):
                 "Correct and annotate",
                 "Drag the divider below the line list to resize the editor. Its formatting controls "
                 "support superscript, subscript, highlights, named tags, and historical special "
-                "characters. You can replay this tour later from Help > Tutorial.",
+                "characters. Tag a word as a person, place, date, … with Tag… or by right-clicking "
+                "it; the tag's name then appears beside the word, and Review > Tags in project "
+                "lists every tag. You can replay this tour later from Help > Tutorial.",
                 self._tutorial_targets.get("review"),
             ),
         ]
@@ -647,6 +890,26 @@ class MainWindow(QMainWindow):
         verify = action("Mark selected line verified", self._verify_line, "Ctrl+Shift+V")
         uncertain = action("Next uncertain line", self._next_uncertain, SHORTCUTS["next_uncertain"])
         evaluate = action("Evaluate corrections", self.evaluate_corrections)
+        tag_overview = action(
+            "Tags in project…", self.show_tag_overview,
+            tip="List every tagged person, place, date, … and jump to it",
+        )
+        move_up = action(
+            "Move line up", lambda: self._move_current_line(-1), SHORTCUTS["move_line_up"],
+            tip="Read the selected line one place earlier",
+        )
+        move_down = action(
+            "Move line down", lambda: self._move_current_line(1), SHORTCUTS["move_line_down"],
+            tip="Read the selected line one place later",
+        )
+        restore_order = action(
+            "Restore detected order", self._restore_detected_order,
+            tip="Undo reading-order changes on this page",
+        )
+        show_order = action("Show reading order on page", self._set_show_reading_order)
+        show_order.setCheckable(True)
+        show_order.setChecked(self.show_reading_order)
+        show_order.setStatusTip("Number each line box on the page in reading order")
         ground_truth = action("Export ground-truth bundle…", self.export_ground_truth_bundle)
         zoom_in = action("Zoom in", lambda: self.viewer.scale(1.2, 1.2), QKeySequence.ZoomIn)
         zoom_out = action("Zoom out", lambda: self.viewer.scale(1 / 1.2, 1 / 1.2), QKeySequence.ZoomOut)
@@ -682,7 +945,16 @@ class MainWindow(QMainWindow):
         review_menu.addActions([save, autosave])
         review_menu.addSeparator()
         review_menu.addActions([verify, uncertain, evaluate])
+        order_menu = review_menu.addMenu("Reading order")
+        order_menu.addActions([move_up, move_down])
+        order_menu.addSeparator()
+        order_menu.addAction(restore_order)
+        review_menu.addSeparator()
+        review_menu.addAction(tag_overview)
         formatting_menu = review_menu.addMenu("Text formatting")
+        formatting_menu.addAction(
+            action("Tag selection…", self._tag_selection, SHORTCUTS["tag"])
+        )
         formatting_menu.addAction(
             action(
                 "Superscript",
@@ -708,6 +980,8 @@ class MainWindow(QMainWindow):
         view_menu.addActions([previous, next_page, go_to_page])
         view_menu.addSeparator()
         view_menu.addActions([zoom_in, zoom_out, zoom_fit])
+        view_menu.addSeparator()
+        view_menu.addAction(show_order)
 
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addActions([tutorial, diagnostic])
@@ -899,6 +1173,8 @@ class MainWindow(QMainWindow):
                 self.project.close()
             self.project_path = project_path
             self.project = new_project
+            if self._tag_overview:  # its entries belong to the previous project
+                self._tag_overview.close()
             self.current_page = 1
             self._render_page()
             self._refresh_lines()
@@ -936,6 +1212,8 @@ class MainWindow(QMainWindow):
             if self.project:
                 self.project.close()
             self.project = new_project
+            if self._tag_overview:  # its entries belong to the previous project
+                self._tag_overview.close()
             new_project = None
             self.project_path = path
             self.current_page = 1
@@ -1028,6 +1306,8 @@ class MainWindow(QMainWindow):
                 overlay = QGraphicsPolygonItem(polygon)
                 overlay.setPen(QPen(QColor("#9A6F6B"), 2))
                 overlay.setData(0, line.id)
+                if self.show_reading_order:
+                    self._add_order_badge(overlay, line.position + 1)
                 self.scene.addItem(overlay)
                 self._overlays.append(overlay)
         self.line_list.blockSignals(False)
@@ -1044,7 +1324,32 @@ class MainWindow(QMainWindow):
             self.editor.clear()
             self.editor.blockSignals(False)
             self.editor.setEnabled(False)
+            self._update_tag_panel()
             self._update_overlay_highlights()
+
+    def _add_order_badge(self, overlay: QGraphicsPolygonItem, number: int) -> None:
+        """Label a line box with its place in the reading order, just left of its corner."""
+
+        bounds = overlay.polygon().boundingRect()
+        text = QGraphicsSimpleTextItem(str(number))
+        font = QFont(self.font())
+        font.setPixelSize(max(12, min(26, round(bounds.height() * 0.45))))
+        font.setBold(True)
+        text.setFont(font)
+        text.setBrush(QBrush(QColor("#FFFFFF")))
+        label = text.boundingRect()
+        badge = QGraphicsRectItem(0, 0, label.width() + 8, label.height() + 2, overlay)
+        badge.setBrush(QBrush(QColor(154, 111, 107, 215)))
+        badge.setPen(QPen(Qt.NoPen))
+        badge.setPos(max(0.0, bounds.left() - badge.rect().width() - 2), bounds.top())
+        text.setParentItem(badge)
+        text.setPos(4, 1)
+
+    @Slot(bool)
+    def _set_show_reading_order(self, enabled: bool) -> None:
+        self.show_reading_order = bool(enabled)
+        QSettings().setValue("view/reading_order", self.show_reading_order)
+        self._refresh_lines()
 
     def _project_model_spec(self) -> ModelSpec:
         if not self.project:
@@ -1666,54 +1971,213 @@ class MainWindow(QMainWindow):
         if cursor is None or not cursor.hasSelection():
             self.statusBar().showMessage("Select text, or place the cursor inside a word, first.", 4_000)
             return
-        color = "#FFF0A8"
-        formatting = QTextCharFormat()
-        formatting.setBackground(QColor(color))
-        formatting.setProperty(HIGHLIGHT_PROPERTY, color)
-        cursor.mergeCharFormat(formatting)
-        self._schedule_autosave()
 
+        def highlighted(formatting: QTextCharFormat) -> QTextCharFormat:
+            formatting.setProperty(HIGHLIGHT_PROPERTY, HIGHLIGHT_COLOR)
+            if not formatting.hasProperty(TAG_PROPERTY):  # a tag's color stays visible
+                formatting.setBackground(QColor(HIGHLIGHT_COLOR))
+            return formatting
+
+        self._rewrite_formats(cursor.selectionStart(), cursor.selectionEnd(), highlighted)
+
+    def _project_tag_colors(self) -> dict[str, str]:
+        """Labels already used in this project, with the color they were given."""
+
+        colors: dict[str, str] = {}
+        if self.project:
+            for line in self.project.tagged_lines():
+                for span in tag_spans(line.display_text, line.annotations):
+                    colors.setdefault(span.label, span.color)
+        for span in self._editor_tags:
+            colors.setdefault(span.label, span.color)
+        return colors
+
+    def _tag_choices(self) -> list[str]:
+        custom = sorted(set(self._project_tag_colors()) - set(TAG_COLORS), key=str.casefold)
+        return [*TAG_COLORS, *custom]
+
+    def _choose_tag_label(self, selected_text: str) -> str | None:
+        """Ask for a tag name; predefined and previously used names are offered."""
+
+        choices = self._tag_choices()
+        words = " ".join(selected_text.split())
+        if len(words) > 40:
+            words = words[:39] + "…"
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("Tag selected text")
+        dialog.setLabelText(f"Tag “{words}” as:\nChoose a tag, or type a new name.")
+        dialog.setComboBoxItems(choices)
+        dialog.setComboBoxEditable(True)
+        dialog.setTextValue(self._last_tag_label if self._last_tag_label in choices else choices[0])
+        if not dialog.exec():
+            return None
+        label = " ".join(dialog.textValue().split())[:60]
+        return label or None
+
+    @Slot()
     def _tag_selection(self) -> None:
         cursor = self._format_cursor(select_word=True)
         if cursor is None or not cursor.hasSelection():
             self.statusBar().showMessage("Select text, or place the cursor inside a word, first.", 4_000)
             return
-        choices = [*TAG_COLORS, "Custom…"]
-        label, accepted = QInputDialog.getItem(
-            self, "Tag selected text", "Tag:", choices, 0, False
-        )
-        if not accepted:
+        label = self._choose_tag_label(cursor.selectedText())
+        if label:
+            self._apply_tag(label)
+
+    def _apply_tag(self, label: str) -> None:
+        cursor = self._format_cursor(select_word=True)
+        if cursor is None or not cursor.hasSelection():
+            self.statusBar().showMessage("Select text, or place the cursor inside a word, first.", 4_000)
             return
-        if label == "Custom…":
-            label, accepted = QInputDialog.getText(self, "Custom tag", "Tag name:")
-            label = label.strip()
-            if not accepted or not label:
-                return
-        palette = tuple(TAG_COLORS.values())
-        color = TAG_COLORS.get(label, palette[sum(map(ord, label)) % len(palette)])
-        formatting = QTextCharFormat()
-        formatting.setBackground(QColor(color))
-        formatting.setProperty(TAG_PROPERTY, label)
-        formatting.setProperty(TAG_COLOR_PROPERTY, color)
-        cursor.mergeCharFormat(formatting)
+        known = self._project_tag_colors().get(label)
+        color = TAG_COLORS.get(label) or known or custom_tag_color(label)
+        tagged = tag_format(label, color)
+
+        def retagged(formatting: QTextCharFormat) -> QTextCharFormat:
+            formatting.merge(tagged)
+            return formatting
+
+        self._rewrite_formats(cursor.selectionStart(), cursor.selectionEnd(), retagged)
+        self._last_tag_label = label
+        # Continue typing after the tagged words without extending the tag.
+        cursor.setPosition(cursor.selectionEnd())
+        self.editor.setTextCursor(cursor)
+        self.editor.setFocus()
         self._schedule_autosave()
+        self.statusBar().showMessage(f"Tagged as {label}.", 3_000)
+
+    def _rewrite_formats(self, start: int, end: int, transform) -> None:
+        """Replace the format of every formatted piece of a range with transform(copy).
+
+        Merging a format can add properties but never remove them, so removals (and
+        changes that depend on a piece's existing tag) rewrite each piece explicitly.
+        """
+
+        document = self.editor.document()
+        pieces: list[tuple[int, int, QTextCharFormat]] = []
+        block = document.findBlock(start)
+        while block.isValid() and block.position() < end:
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                iterator += 1
+                if not fragment.isValid():
+                    continue
+                low = max(start, fragment.position())
+                high = min(end, fragment.position() + fragment.length())
+                if low < high:
+                    pieces.append((low, high, QTextCharFormat(fragment.charFormat())))
+            block = block.next()
+        for low, high, formatting in pieces:
+            cursor = QTextCursor(document)
+            cursor.setPosition(low)
+            cursor.setPosition(high, QTextCursor.KeepAnchor)
+            cursor.setCharFormat(transform(formatting))
+        self._schedule_autosave()
+
+    def _strip_formats(
+        self, start: int, end: int, *, tags: bool, highlights: bool, vertical: bool
+    ) -> None:
+        def stripped(formatting: QTextCharFormat) -> QTextCharFormat:
+            if tags:
+                formatting = untagged_format(formatting)
+            if highlights and formatting.hasProperty(HIGHLIGHT_PROPERTY):
+                formatting.clearProperty(HIGHLIGHT_PROPERTY)
+                if not formatting.hasProperty(TAG_PROPERTY):
+                    formatting.clearBackground()
+            if vertical:
+                formatting.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignNormal)
+            return formatting
+
+        self._rewrite_formats(start, end, stripped)
 
     def _clear_selection_format(self) -> None:
         cursor = self._format_cursor(select_word=True)
         if cursor is None or not cursor.hasSelection():
             return
-        formatting = QTextCharFormat()
-        formatting.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignNormal)
-        formatting.clearBackground()
-        formatting.clearProperty(TAG_PROPERTY)
-        formatting.clearProperty(TAG_COLOR_PROPERTY)
-        formatting.clearProperty(HIGHLIGHT_PROPERTY)
-        cursor.mergeCharFormat(formatting)
+        self._strip_formats(
+            cursor.selectionStart(), cursor.selectionEnd(), tags=True, highlights=True, vertical=True
+        )
+        self.editor.setCurrentCharFormat(untagged_format(self.editor.currentCharFormat()))
         self.superscript_button.setChecked(False)
         self.subscript_button.setChecked(False)
-        self._schedule_autosave()
+
+    def _remove_tag(self, span: TagSpan) -> None:
+        self._strip_formats(span.start, span.end, tags=True, highlights=False, vertical=False)
+        self.statusBar().showMessage(f"Removed the tag {span.label}.", 3_000)
+
+    def _extend_editor_menu(self, menu: QMenu, cursor: QTextCursor) -> None:
+        """Offer tagging and tag removal in the editor's right-click menu."""
+
+        if not self.editor.isEnabled():
+            return
+        menu.addSeparator()
+        tag_menu = menu.addMenu("Tag as")
+        for label in self._tag_choices():
+            tag_menu.addAction(label, lambda _checked=False, value=label: self._apply_tag(value))
+        tag_menu.addSeparator()
+        tag_menu.addAction("New tag…", self._tag_selection)
+        if cursor.hasSelection():
+            start, end = cursor.selectionStart(), cursor.selectionEnd()
+            touched = [span for span in self._editor_tags if span.start < end and start < span.end]
+        else:
+            position = cursor.position()
+            touched = [span for span in self._editor_tags if span.start <= position <= span.end]
+        for span in touched:
+            words = " ".join(span.text.split())
+            menu.addAction(
+                f"Remove tag “{span.label}” from “{words}”",
+                lambda _checked=False, value=span: self._remove_tag(value),
+            )
+
+    @Slot()
+    def _update_tag_panel(self) -> None:
+        if not self.editor.isEnabled() or self.current_line_id is None:
+            self._editor_tags = []
+            self.tag_panel.clear()
+            return
+        self._editor_tags = tag_spans(self.editor.toPlainText(), self._collect_annotations())
+        if not self._editor_tags:
+            self.tag_panel.setText(
+                "No tags in this line. Select a word and choose <b>Tag…</b> "
+                f"({html.escape(shortcut_text(SHORTCUTS['tag'][0]))}) or right-click it."
+            )
+            return
+        entries = []
+        for index, span in enumerate(self._editor_tags):
+            words = html.escape(" ".join(span.text.split()))
+            entries.append(
+                f'{tag_label_html(span.label, span.color)}&nbsp;'
+                f'<a href="select:{index}" style="color:#20252B; text-decoration:none;">{words}</a>'
+                f'&nbsp;<a href="remove:{index}" style="color:#9A6F6B; text-decoration:none;">✕</a>'
+            )
+        self.tag_panel.setText("Tags: " + " &nbsp;&nbsp; ".join(entries))
+        self.tag_panel.setToolTip("Click tagged words to select them; ✕ removes that tag.")
+
+    @Slot(str)
+    def _tag_panel_link(self, link: str) -> None:
+        kind, _separator, number = link.partition(":")
+        try:
+            span = self._editor_tags[int(number)]
+        except (ValueError, IndexError):
+            return
+        if kind == "remove":
+            self._remove_tag(span)
+        elif kind == "select":
+            self._select_editor_range(span.start, span.end)
+
+    def _select_editor_range(self, start: int, end: int) -> None:
+        length = len(self.editor.toPlainText())
+        cursor = self.editor.textCursor()
+        cursor.setPosition(min(start, length))
+        cursor.setPosition(min(end, length), QTextCursor.KeepAnchor)
+        self.editor.setTextCursor(cursor)
+        self.editor.setFocus()
 
     def _insert_character(self, character: str) -> None:
+        if not self.editor.isEnabled():
+            return
+        self.editor.prepare_insertion()
         cursor = self._format_cursor()
         if cursor is None:
             return
@@ -1754,32 +2218,39 @@ class MainWindow(QMainWindow):
                         "label": str(formatting.property(TAG_PROPERTY)),
                         "color": str(formatting.property(TAG_COLOR_PROPERTY) or "#FFF0A8"),
                     })
-                elif formatting.hasProperty(HIGHLIGHT_PROPERTY):
+                # Recorded independently, so a highlight survives tagging and untagging.
+                if formatting.hasProperty(HIGHLIGHT_PROPERTY):
                     annotations.append({
                         "start": start,
                         "end": end,
                         "kind": "highlight",
-                        "color": str(formatting.property(HIGHLIGHT_PROPERTY) or "#FFF0A8"),
+                        "color": str(formatting.property(HIGHLIGHT_PROPERTY) or HIGHLIGHT_COLOR),
                     })
             block = block.next()
 
+        # Join pieces of one annotation that Qt split into several fragments, e.g. a tag
+        # whose middle letter is superscript.
         merged: list[dict[str, object]] = []
+        latest: dict[tuple, dict[str, object]] = {}
         for annotation in annotations:
-            identity = {key: value for key, value in annotation.items() if key not in {"start", "end"}}
-            if (
-                merged
-                and merged[-1]["end"] == annotation["start"]
-                and {key: value for key, value in merged[-1].items() if key not in {"start", "end"}}
-                == identity
-            ):
-                merged[-1]["end"] = annotation["end"]
+            identity = tuple(
+                sorted((key, value) for key, value in annotation.items() if key not in {"start", "end"})
+            )
+            previous = latest.get(identity)
+            if previous is not None and previous["end"] == annotation["start"]:
+                previous["end"] = annotation["end"]
             else:
-                merged.append(dict(annotation))
+                latest[identity] = dict(annotation)
+                merged.append(latest[identity])
         return merged
 
     def _apply_annotations(self, annotations: list[dict[str, object]]) -> None:
         length = len(self.editor.toPlainText())
-        for annotation in annotations:
+        # Tags last, so their color shows over a highlight on the same words.
+        ordered = sorted(
+            annotations, key=lambda item: isinstance(item, dict) and item.get("kind") == "tag"
+        )
+        for annotation in ordered:
             try:
                 start = max(0, min(length, int(annotation["start"])))
                 end = max(start, min(length, int(annotation["end"])))
@@ -1797,14 +2268,16 @@ class MainWindow(QMainWindow):
             elif kind == "subscript":
                 formatting.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignSubScript)
             elif kind == "tag":
-                color = str(annotation.get("color", "#FFF0A8"))
-                formatting.setBackground(QColor(color))
-                formatting.setProperty(TAG_PROPERTY, str(annotation.get("label", "Tag")))
-                formatting.setProperty(TAG_COLOR_PROPERTY, color)
+                label = str(annotation.get("label") or "Tag")
+                stored = annotation.get("color")
+                formatting = tag_format(label, tag_color(label, stored))
+                # Keep the stored color so that merely viewing a line never rewrites it.
+                if isinstance(stored, str) and stored:
+                    formatting.setProperty(TAG_COLOR_PROPERTY, stored)
             elif kind == "highlight":
-                color = str(annotation.get("color", "#FFF0A8"))
-                formatting.setBackground(QColor(color))
+                color = str(annotation.get("color") or HIGHLIGHT_COLOR)
                 formatting.setProperty(HIGHLIGHT_PROPERTY, color)
+                formatting.setBackground(QColor(color))
             else:
                 continue
             cursor.mergeCharFormat(formatting)
@@ -1818,12 +2291,17 @@ class MainWindow(QMainWindow):
         self.current_line_text = line.display_text
         self.current_line_annotations = line.annotations
         self.editor.blockSignals(True)
+        # setPlainText gives the new text the caret's current format; without this reset
+        # a tag, highlight, or superscript at the caret in the previous line would be
+        # copied onto the entire newly selected line (and saved when leaving it).
+        self.editor.setCurrentCharFormat(QTextCharFormat())
         self.editor.setPlainText(line.display_text)
         self._apply_annotations(line.annotations)
         self.editor.setEnabled(True)
         self.editor.blockSignals(False)
         self.superscript_button.setChecked(False)
         self.subscript_button.setChecked(False)
+        self._update_tag_panel()
         self._update_overlay_highlights()
 
     @Slot(object)
@@ -1868,7 +2346,14 @@ class MainWindow(QMainWindow):
         label = self.thresholds.classify(line.confidence).value
         verified = line.review_status == ReviewStatus.VERIFIED
         mark = "✓ " if verified else ""
-        item.setText(f"{line.reading_order + 1:03d}  {mark}[{label.replace('_', ' ')}]  {line.display_text}")
+        prefix = f"{line.position + 1:03d}  {mark}[{label.replace('_', ' ')}]  "
+        item.setText(prefix + line.display_text)
+        # Rich rendering shows formatting and names each tag directly at its words.
+        item.setData(
+            LINE_HTML_ROLE,
+            f'<span style="color:#56616D;">{html.escape(prefix)}</span>'
+            + annotated_html(line.display_text, line.annotations),
+        )
         item.setData(NEEDS_REVIEW_ROLE, not verified and label != "higher")
         color = CONFIDENCE_COLORS.get(label)
         item.setBackground(QBrush(QColor(color)) if color else QBrush())
@@ -1879,6 +2364,9 @@ class MainWindow(QMainWindow):
             notes.append(f"Recognition failed: {line.recognition_error}")
         if line.truncated:
             notes.append("The model stopped at its length limit; the end of this line may be missing.")
+        tags = tag_summary(line.display_text, line.annotations)
+        if tags:
+            notes.append(f"Tags: {tags}")
         item.setToolTip("\n".join(notes))
 
     def _update_line_item(self, line_id: int) -> None:
@@ -1889,6 +2377,116 @@ class MainWindow(QMainWindow):
             if int(item.data(Qt.UserRole)) == line_id:
                 self._describe_line_item(item, self.project.line(line_id))
                 return
+
+    @Slot()
+    def _store_list_order(self) -> None:
+        """Persist the order shown in the line list (after the reviewer dragged a line)."""
+
+        if not self.project:
+            return
+        line_ids = [
+            int(self.line_list.item(row).data(Qt.UserRole)) for row in range(self.line_list.count())
+        ]
+        self._set_line_order(line_ids)
+
+    def _set_line_order(self, line_ids: list[int]) -> None:
+        try:
+            self.project.set_line_order(self.current_page, line_ids)
+        except ValueError as error:
+            self._error("The reading order could not be changed", str(error))
+        self._refresh_lines()
+        current = self.line_list.currentItem()
+        if current:
+            self.line_list.scrollToItem(current)
+        self.status_label.setText(
+            "Reading order updated; exports use this order. "
+            "Review > Reading order > Restore detected order undoes it."
+        )
+
+    def _move_current_line(self, step: int) -> None:
+        row = self.line_list.currentRow()
+        target = row + step
+        if not self.project or row < 0:
+            self.statusBar().showMessage("Select the line to move first.", 4_000)
+            return
+        if not 0 <= target < self.line_list.count():
+            return
+        line_ids = [
+            int(self.line_list.item(index).data(Qt.UserRole))
+            for index in range(self.line_list.count())
+        ]
+        line_ids.insert(target, line_ids.pop(row))
+        self._set_line_order(line_ids)
+
+    @Slot()
+    def _restore_detected_order(self) -> None:
+        if not self.project:
+            return
+        self.project.reset_line_order(self.current_page)
+        self._refresh_lines()
+        self.status_label.setText("This page uses the detected reading order again.")
+
+    def _line_list_menu(self, point) -> None:
+        item = self.line_list.itemAt(point)
+        if item is None or not self.project:
+            return
+        self.line_list.setCurrentItem(item)
+        menu = QMenu(self)
+        menu.addAction(self.actions["Move line up"])
+        menu.addAction(self.actions["Move line down"])
+        menu.addAction(self.actions["Restore detected order"])
+        menu.addSeparator()
+        menu.addAction(self.actions["Mark selected line verified"])
+        menu.exec(self.line_list.viewport().mapToGlobal(point))
+
+    @Slot()
+    def show_tag_overview(self) -> None:
+        if not self.project:
+            self._error("No project is open", "Open a project first.")
+            return
+        self.save_current_edit()
+        entries = [
+            {
+                "label": span.label,
+                "text": " ".join(span.text.split()),
+                "color": span.color,
+                "page": line.page_number,
+                "line": line.position + 1,
+                "line_id": line.id,
+                "start": span.start,
+                "end": span.end,
+            }
+            for line in self.project.tagged_lines()
+            for span in tag_spans(line.display_text, line.annotations)
+        ]
+        if self._tag_overview:
+            self._tag_overview.close()
+        dialog = TagOverviewDialog(entries, self)
+        dialog.jump_requested.connect(self._jump_to_tag)
+        dialog.finished.connect(lambda _result: setattr(self, "_tag_overview", None))
+        self._tag_overview = dialog
+        dialog.show()
+
+    @Slot(object)
+    def _jump_to_tag(self, entry: dict) -> None:
+        if not self.project:
+            return
+        try:
+            line = self.project.line(int(entry["line_id"]))
+        except KeyError:
+            self._error(
+                "This tag is no longer available",
+                "The line was replaced, for example by re-segmentation. Open the tag list again.",
+            )
+            return
+        self._go_to_page(line.page_number)
+        for row in range(self.line_list.count()):
+            if int(self.line_list.item(row).data(Qt.UserRole)) == line.id:
+                self.line_list.setCurrentRow(row)
+                self.line_list.scrollToItem(self.line_list.item(row))
+                break
+        self._select_editor_range(int(entry["start"]), int(entry["end"]))
+        self.activateWindow()
 
     @Slot()
     def _verify_line(self) -> None:

@@ -104,3 +104,48 @@ def test_stored_geometry_recreates_the_recognition_crop():
             - np.asarray(line.crop.crop((0, 0, width, height)), dtype=int)
         )
         assert difference.mean() < 2.0
+
+
+def _handwriting_like_page(line_tops, height=3500, width=2480, background=None):
+    """Lines of word blobs with ascender/descender strokes, like dense Kurrent pages."""
+
+    image = background.copy() if background is not None else Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    for top in line_tops:
+        x = 260
+        while x < width - 400:
+            draw.rectangle((x, top, x + 150, top + 26), fill=(40, 30, 30))
+            draw.line((x + 20, top - 30, x + 20, top + 26), fill=(40, 30, 30), width=5)
+            draw.line((x + 110, top, x + 110, top + 62), fill=(40, 30, 30), width=5)
+            x += 210
+    return image
+
+
+def test_dense_lines_closer_than_one_thirtieth_of_the_page_stay_separate():
+    # 105 px spacing on a 3500 px page: the former fixed 118 px merge distance fused
+    # neighbouring lines into two- and three-line boxes.
+    tops = list(range(300, 3200, 105))
+    lines = ProjectionSegmenter().detect_lines(_handwriting_like_page(tops))
+    assert len(lines) == len(tops)
+    assert max(line.bbox.height for line in lines) < 1.5 * 105
+
+
+def test_uneven_illumination_does_not_become_ink():
+    width, height = 2480, 3500
+    shade = Image.linear_gradient("L").resize((width, height))  # dark towards the bottom
+    background = Image.merge(
+        "RGB",
+        [shade.point(lambda value: 245 - value * 95 // 255)] * 3,
+    )
+    tops = list(range(300, 2900, 110))
+    lines = ProjectionSegmenter().detect_lines(_handwriting_like_page(tops, background=background))
+    assert len(lines) == len(tops)
+    assert max(line.bbox.height for line in lines) < 1.5 * 110
+
+
+def test_grouped_lines_use_the_single_line_spacing():
+    # Address blocks: pairs of lines with wide gaps between the pairs. The pair period
+    # must not be mistaken for the distance between single lines.
+    tops = [top for start in range(400, 3000, 420) for top in (start, start + 115)]
+    lines = ProjectionSegmenter().detect_lines(_handwriting_like_page(tops))
+    assert len(lines) == len(tops)

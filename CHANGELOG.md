@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Fixed line detection merging two to four neighbouring lines into one box on densely written pages. Weak
+  profile peaks were merged within a fixed distance of 1/30 of the page height, which exceeds the line
+  spacing of typical Kurrent pages; suppression is now relative to each page's measured line spacing and
+  never crosses a clear gap of paper. On a 66-page test document, boxes now match single lines (median
+  height 90–170 px instead of 130–370 px at 300 DPI).
+- Ink is separated from paper after correcting uneven illumination, so darker page regions in phone or
+  CamScanner images no longer become ink that swallows short lines into large, mostly empty boxes.
+- The line detector version is now 4. Projects processed with an older detector are offered the existing
+  backup-and-re-segment step before further transcription, so old and new boxes are never mixed.
+- Fixed the macOS CI failure of the tutorial layout test, which depended on platform font metrics.
+
 ## 1.1.2 — 2026-11-26
 
 - Fixed invisible text on macOS in Dark Mode: the line list, editor, menus, and inputs rendered light text

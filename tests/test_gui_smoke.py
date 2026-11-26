@@ -93,10 +93,11 @@ def test_tutorial_fits_small_windows_and_does_not_cover_its_target(qtbot):
     target.show()
     parent.show()
 
+    # Long enough to overflow the 425 px window with any platform's font metrics.
     long_text = " ".join(
         [
             "KurrentScholar keeps every part of this explanation available on smaller screens."
-            for _ in range(12)
+            for _ in range(40)
         ]
     )
     overlay = TutorialOverlay(
@@ -110,7 +111,13 @@ def test_tutorial_fits_small_windows_and_does_not_cover_its_target(qtbot):
     qtbot.wait(50)
 
     assert overlay.rect().contains(overlay.card.geometry())
-    assert overlay.body_scroll.verticalScrollBar().maximum() > 0
+    scroll_bar = overlay.body_scroll.verticalScrollBar()
+    # Scroll ranges are applied from queued layout events, later on some platforms (macOS).
+    qtbot.waitUntil(lambda: scroll_bar.maximum() > 0, timeout=2_000)
+    # Every line of the explanation must remain reachable by scrolling.
+    body = overlay.body
+    assert body.height() >= body.heightForWidth(body.width())
+    assert overlay.body_scroll.viewport().height() + scroll_bar.maximum() >= body.height()
 
     overlay._move(1)
     qtbot.wait(20)

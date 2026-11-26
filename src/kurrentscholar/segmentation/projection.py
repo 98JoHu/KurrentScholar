@@ -64,7 +64,7 @@ class ProjectionSegmenter:
     """
 
     backend_id = "opencv-projection-fallback"
-    version = "3"
+    version = "4"
 
     def __init__(self, minimum_height: int = 8, padding: int = 6) -> None:
         self.minimum_height = minimum_height
@@ -77,14 +77,7 @@ class ProjectionSegmenter:
         if gray.size == 0 or float(gray.std()) < 1.0:
             return []
 
-        otsu_threshold = cv2.threshold(
-            gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
-        )[0]
-        # Yellowed paper, shadows, and reverse-side bleed-through can make Otsu's
-        # threshold so light that the paper itself becomes "ink". Genuine ink in
-        # the supported scans remains comfortably below this conservative cap.
-        ink_threshold = min(float(otsu_threshold), 190.0)
-        binary = cv2.threshold(gray, ink_threshold, 255, cv2.THRESH_BINARY_INV)[1]
+        binary = self._ink_mask(gray)
         height, width = binary.shape
         analysis = binary.copy()
         self._clear_scan_edges(analysis)
@@ -107,11 +100,11 @@ class ProjectionSegmenter:
 
         profile = np.count_nonzero(analysis, axis=1).astype(np.float32)
         smooth_profile = self._smooth(profile, height)
-        centres = self._line_centres(smooth_profile, width, height)
+        centres, spacing = self._line_centres(smooth_profile, width, height)
         if not centres:
             return []
 
-        boundaries = self._valley_boundaries(smooth_profile, centres, height)
+        boundaries = self._valley_boundaries(smooth_profile, centres, height, spacing)
         boxes: list[BoundingBox] = []
         for centre, (top, bottom) in zip(centres, boundaries, strict=True):
             boxes.extend(self._boxes_in_band(analysis, top, bottom, centre))
@@ -126,6 +119,33 @@ class ProjectionSegmenter:
             source_box = self._polygon_bbox(polygon, width, height)
             detected.append(DetectedLine(source_box, order, crop, polygon))
         return detected
+
+    @staticmethod
+    def _ink_mask(gray: np.ndarray) -> np.ndarray:
+        """Binarize ink after dividing out uneven paper illumination.
+
+        Phone scans and photographed folios are often darker towards one edge. A single
+        global threshold then turns that paper into "ink", which fuses lines and produces
+        page-sized boxes. Estimating the paper background (ink removed by a closing larger
+        than any pen stroke) and dividing it out leaves only genuine strokes dark.
+        """
+
+        height, width = gray.shape
+        scale = min(1.0, 800.0 / max(height, width))
+        small = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        kernel_size = max(3, int(round(min(small.shape) * 0.03)) | 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        background = cv2.morphologyEx(small, cv2.MORPH_CLOSE, kernel)
+        background = cv2.GaussianBlur(background, (0, 0), sigmaX=kernel_size / 2.0)
+        background = cv2.resize(background, (width, height), interpolation=cv2.INTER_LINEAR)
+        normalized = cv2.divide(gray, np.maximum(background, 1), scale=255)
+        otsu_threshold = cv2.threshold(
+            normalized, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        )[0]
+        # Bleed-through and paper texture must not become ink even when a page holds
+        # very little writing; genuine strokes stay well below this conservative cap.
+        ink_threshold = min(float(otsu_threshold), 190.0)
+        return cv2.threshold(normalized, ink_threshold, 255, cv2.THRESH_BINARY_INV)[1]
 
     @classmethod
     def _estimate_deskew_angle(cls, binary: np.ndarray) -> float:
@@ -236,40 +256,88 @@ class ProjectionSegmenter:
     @classmethod
     def _line_centres(
         cls, profile: np.ndarray, width: int, height: int
-    ) -> list[int]:
-        # A wide local-maximum window keeps ascenders and descenders from becoming
-        # independent lines while still allowing the tight spacing in ledgers.
+    ) -> tuple[list[int], float | None]:
+        """Return one centre per text line and the estimated line spacing.
+
+        Candidate centres are local maxima of the ink profile. Underlines, flourishes,
+        and the gap between x-height and descenders add weaker peaks roughly half a
+        line apart; those are suppressed relative to the page's own line spacing. A
+        fixed, page-size-based distance would instead merge genuine neighbouring lines
+        whenever the writing is denser than that distance.
+        """
+
+        # The local-maximum window keeps single strokes from becoming peaks while still
+        # allowing the tight spacing found in ledgers.
         window = max(9, int(round(height / 60.0)) | 1)
         local_maximum = cv2.dilate(
             profile.reshape(-1, 1), np.ones((window, 1), dtype=np.uint8)
         ).ravel()
         minimum_ink = max(8.0, width * 0.01)
         candidates = (profile >= local_maximum - 1e-6) & (profile >= minimum_ink)
+        peaks = [
+            start + int(np.argmax(profile[start:end])) for start, end in cls._bands(candidates)
+        ]
+        if not peaks:
+            return [], None
 
-        centres: list[int] = []
-        for start, end in cls._bands(candidates):
-            local = profile[start:end]
-            centres.append(start + int(np.argmax(local)))
+        spacing = cls._line_spacing(profile, peaks, height)
+        separation = 0.6 * spacing if spacing else float(window * 2)
+        separation = max(window / 2.0, separation)
+        def shoulder_of(peak: int, kept: int) -> bool:
+            # A weaker peak close to a stronger one is the same line (underline,
+            # flourish, descender band) unless clear paper separates the two.
+            if abs(peak - kept) >= separation:
+                return False
+            low, high = sorted((peak, kept))
+            valley = float(profile[low : high + 1].min())
+            return valley > 0.35 * float(profile[peak])
 
-        # Antialiased or textured strokes can leave two nearby projection peaks
-        # within one physical line after deskewing. Consolidate only peaks much
-        # closer than normal line spacing, retaining the stronger centre.
-        consolidated: list[int] = []
-        minimum_separation = max(12, window * 2)
-        for centre in centres:
-            if consolidated and centre - consolidated[-1] < minimum_separation:
-                if profile[centre] > profile[consolidated[-1]]:
-                    consolidated[-1] = centre
-            else:
-                consolidated.append(centre)
-        return consolidated
+        accepted: list[int] = []
+        for peak in sorted(peaks, key=lambda index: float(profile[index]), reverse=True):
+            if not any(shoulder_of(peak, kept) for kept in accepted):
+                accepted.append(peak)
+        return sorted(accepted), spacing
+
+    @staticmethod
+    def _line_spacing(profile: np.ndarray, peaks: list[int], height: int) -> float | None:
+        """Estimate the distance between neighbouring lines in profile pixels."""
+
+        shortest, longest = max(12, height // 150), max(13, height // 6)
+        centred = profile.astype(np.float64) - float(profile.mean())
+        energy = float(np.dot(centred, centred))
+        if energy > 0 and len(centred) > longest + 1:
+            correlation = np.correlate(centred, centred, "full")[len(centred) - 1 :] / energy
+            lags = correlation[shortest:longest]
+            maxima = [
+                index
+                for index in range(1, len(lags) - 1)
+                if lags[index] >= lags[index - 1] and lags[index] >= lags[index + 1]
+            ]
+            if maxima:
+                strongest = max(float(lags[index]) for index in maxima)
+                # A clearly periodic profile (many regular lines) gives a reliable period.
+                # Groups of lines (addresses, headings) add stronger multiples of the line
+                # period; the shortest strong period is the distance between single lines.
+                if strongest >= 0.3:
+                    period = min(index for index in maxima if lags[index] >= 0.75 * strongest)
+                    return float(period + shortest)
+        # Sparse pages have no clear period; use the typical gap between candidates.
+        if len(peaks) >= 3:
+            gaps = np.diff(peaks)
+            gaps = gaps[gaps >= shortest]
+            if len(gaps):
+                return float(np.median(gaps))
+        return None
 
     @staticmethod
     def _valley_boundaries(
-        profile: np.ndarray, centres: list[int], height: int
+        profile: np.ndarray, centres: list[int], height: int, spacing: float | None = None
     ) -> list[tuple[int, int]]:
+        # Isolated first/last lines may not claim much more than one line of space;
+        # otherwise distant marks, stains, or page edges become part of their box.
+        reach = round(spacing * 1.1) if spacing else None
         if len(centres) == 1:
-            radius = max(20, round(height * 0.08))
+            radius = reach or max(20, round(height * 0.08))
             return [(max(0, centres[0] - radius), min(height, centres[0] + radius))]
 
         separators: list[int] = []
@@ -282,6 +350,9 @@ class ProjectionSegmenter:
 
         first_extent = round((centres[1] - centres[0]) * 1.25)
         last_extent = round((centres[-1] - centres[-2]) * 1.25)
+        if reach:
+            first_extent = min(first_extent, reach)
+            last_extent = min(last_extent, reach)
         first_bound = max(0, centres[0] - first_extent)
         last_bound = min(height, centres[-1] + last_extent)
         bounds = [first_bound, *separators, last_bound]

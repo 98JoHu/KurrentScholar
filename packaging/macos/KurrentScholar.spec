@@ -78,5 +78,7 @@ app = BUNDLE(
         "LSApplicationCategoryType": "public.app-category.education",
         "LSMinimumSystemVersion": "12.0",
         "NSHighResolutionCapable": True,
+        # Long transcriptions keep running at full speed while the window is in the background.
+        "LSAppNapIsDisabled": True,
     },
 )

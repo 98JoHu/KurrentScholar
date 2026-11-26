@@ -86,6 +86,8 @@ jobs:
           mkdir -p dist/dmg-root
           ditto dist/KurrentScholar.app dist/dmg-root/KurrentScholar.app
           ln -s /Applications dist/dmg-root/Applications
+          # Ship license and third-party (including Qt LGPL) notices, as the Windows installer does.
+          cp LICENSE THIRD_PARTY_NOTICES.md dist/dmg-root/
           hdiutil create -volname KurrentScholar -srcfolder dist/dmg-root \
             -ov -format UDZO "dist/${{ matrix.artifact }}"
           codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" \

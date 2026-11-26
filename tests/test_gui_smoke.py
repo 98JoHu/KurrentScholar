@@ -406,3 +406,78 @@ def test_resegmentation_creates_backup_before_reset(qtbot, monkeypatch, tmp_path
     with ProjectDatabase(backups[0]) as backup:
         assert backup.lines()[0].machine_text == "old result"
 
+
+
+@pytest.mark.gui
+def test_install_completion_checks_the_downloaded_model_not_a_later_selection(qtbot, monkeypatch):
+    import threading
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from kurrentscholar.constants import MODEL_CATALOG
+    from kurrentscholar.recognition import ModelManager
+    from kurrentscholar.ui.main_window import MainWindow
+
+    window = MainWindow(offer_model_on_startup=False)
+    qtbot.addWidget(window)
+    release = threading.Event()
+    downloading = window.model_manager
+    monkeypatch.setattr(downloading, "install", lambda _progress: release.wait(5))
+    monkeypatch.setattr(
+        downloading,
+        "status",
+        lambda: SimpleNamespace(installed=True, missing_files=(), invalid_files=()),
+    )
+    messages = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **_: messages.append(args[1]))
+    errors = []
+    monkeypatch.setattr(window, "_error", lambda title, *_: errors.append(title))
+
+    window._start_model_installation()
+    # Something else (e.g. starting a transcription) switches the project model meanwhile.
+    window.model_manager = ModelManager(spec=MODEL_CATALOG[1])
+    window._install_selected_model(MODEL_CATALOG[2])
+    assert errors == ["A model download is active"]
+    release.set()
+    qtbot.waitUntil(lambda: window._install_thread is None, timeout=5_000)
+
+    assert errors == ["A model download is active"]
+    assert messages == ["Model installation complete"]
+
+
+@pytest.mark.gui
+def test_review_list_marks_verified_lines_and_skips_them(qtbot, tmp_path):
+    from kurrentscholar.domain import BoundingBox, ReviewStatus
+    from kurrentscholar.projects import ProjectDatabase
+    from kurrentscholar.ui.main_window import MainWindow
+
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"source")
+    project = ProjectDatabase(tmp_path / "review.ksproj", create=True)
+    project.set_document(source, 1)
+    project.upsert_page(1, 1000, 1500, 300)
+    first = project.add_line(1, 0, BoundingBox(10, 20, 300, 40), "eins", 0.6, [], [])
+    project.add_line(1, 1, BoundingBox(10, 80, 300, 40), "zwei", 0.95, [], [])
+    third = project.add_line(1, 2, BoundingBox(10, 140, 300, 40), "drei", 0.6, [], [])
+    project.add_line(
+        1, 3, BoundingBox(10, 200, 300, 40), "", None, [], [], recognition_error="boom"
+    )
+    project.set_review_status(third, ReviewStatus.VERIFIED)
+
+    window = MainWindow(offer_model_on_startup=False)
+    qtbot.addWidget(window)
+    window.project = project
+    window.project_path = tmp_path / "review.ksproj"
+    window._refresh_lines()
+
+    assert "✓" in window.line_list.item(2).text()
+    assert "Recognition failed: boom" in window.line_list.item(3).toolTip()
+    window.line_list.setCurrentRow(0)
+    window._next_uncertain()
+    assert window.line_list.currentRow() == 3  # skips confident line 2 and verified line 3
+
+    window.line_list.setCurrentRow(0)
+    window._verify_line()
+    assert window.current_line_id == first
+    assert "✓" in window.line_list.item(0).text()
+    assert window._export_default_path(".txt") == str(tmp_path / "review.txt")

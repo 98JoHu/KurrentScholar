@@ -18,6 +18,7 @@ class RenderedPage:
 
 class DocumentRenderer:
     SUPPORTED_IMAGES = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+    MULTI_PAGE_IMAGES = {".tif", ".tiff"}
 
     def page_count(self, path: str | Path) -> int:
         source = Path(path)
@@ -32,6 +33,12 @@ class DocumentRenderer:
                     document.close()
             except Exception as error:
                 raise ValueError("The PDF could not be opened. It may be damaged or encrypted.") from error
+        if source.suffix.lower() in self.MULTI_PAGE_IMAGES:
+            try:
+                with Image.open(source) as opened:
+                    return max(1, int(getattr(opened, "n_frames", 1)))
+            except Exception as error:
+                raise ValueError("The image could not be opened or is damaged") from error
         if source.suffix.lower() in self.SUPPORTED_IMAGES:
             return 1
         raise ValueError("Choose a PDF, PNG, JPEG, or TIFF file")
@@ -42,12 +49,18 @@ class DocumentRenderer:
         source = Path(path)
         if source.suffix.lower() == ".pdf":
             image = self._render_pdf(source, page_index, dpi)
-        elif source.suffix.lower() in self.SUPPORTED_IMAGES and page_index == 0:
+        elif source.suffix.lower() in self.SUPPORTED_IMAGES and page_index >= 0:
+            if page_index and source.suffix.lower() not in self.MULTI_PAGE_IMAGES:
+                raise ValueError("Invalid page number or unsupported document format")
             try:
                 with Image.open(source) as opened:
                     opened.verify()
                 with Image.open(source) as opened:
+                    # Multi-page TIFF scans store one manuscript page per frame.
+                    opened.seek(page_index)
                     image = ImageOps.exif_transpose(opened).convert("RGB")
+            except EOFError as error:
+                raise ValueError("Invalid page number or unsupported document format") from error
             except Exception as error:
                 raise ValueError("The image could not be opened or is damaged") from error
         else:

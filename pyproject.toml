@@ -14,6 +14,7 @@ maintainers = [{name = "Jonas Hummel", email = "jonas.hummel@kit.edu"}]
 keywords = ["handwriting recognition", "Kurrent", "HTR", "digital humanities", "TrOCR"]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
+  "Environment :: MacOS X",
   "Environment :: Win32 (MS Windows)",
   "Intended Audience :: Science/Research",
   "License :: OSI Approved :: MIT License",

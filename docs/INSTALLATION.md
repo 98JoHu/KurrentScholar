@@ -11,6 +11,12 @@ unknown-publisher warning; do not disable system security. The recognition model
 On first start, KurrentScholar explains that transcription cannot work without it and offers the one-time
 download.
 
+On macOS 12 or newer, download the DMG for your processor
+([Apple Silicon](https://github.com/98JoHu/KurrentScholar/releases/latest/download/KurrentScholar-macOS-Apple-Silicon.dmg)
+or [Intel](https://github.com/98JoHu/KurrentScholar/releases/latest/download/KurrentScholar-macOS-Intel.dmg)),
+open it, and drag KurrentScholar into Applications. The DMGs are signed and notarized by Apple. To remove
+the app, delete it from Applications; models live in `~/Library/Application Support/KurrentScholar`.
+
 ## Source setup
 
 Install Git and `uv`; no global Python is required because `uv` can provision the pinned Python version.
@@ -28,8 +34,9 @@ margin. If interrupted, choose Install / repair; Hugging Face Hub reuses complet
 
 KurrentScholar verifies the expected file sizes and the pinned weights checksum before marking the model
 ready. If installation fails, retry from **Models > Model Manager** and inspect
-`%LOCALAPPDATA%\KurrentScholar\Logs\kurrentscholar.log` for the recorded technical cause. Windows' trust
-store is used for HTTPS, which supports ordinary institutional certificate deployments without disabling
+`%LOCALAPPDATA%\KurrentScholar\Logs\kurrentscholar.log` (macOS: `~/Library/Logs/KurrentScholar/`) for the
+recorded technical cause. The operating system's trust store (Windows certificate store or macOS Keychain)
+is used for HTTPS, which supports ordinary institutional certificate deployments without disabling
 certificate verification.
 
 ## Windows one-directory build

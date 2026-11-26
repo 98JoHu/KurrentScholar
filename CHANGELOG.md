@@ -17,6 +17,19 @@
   metadata (the always-empty `metadata` key is no longer written to research JSON).
 - Marking a line verified now saves its pending edit first. Messages that referred to the removed
   "Install model" button now point to **Models > Model Manager**; documentation lists macOS log locations.
+- Fixed a model download being reported as failed (and its progress showing another model) when a
+  transcription or model selection happened during the download. Installing or removing another model
+  while a download runs is now refused with an explanation.
+- Multi-page TIFF files now open with all pages; previously only the first page was available.
+- The review list marks verified lines with ✓, explains failed or truncated recognitions in a tooltip, and
+  **Next uncertain line** skips lines that are already verified.
+- Ground-truth bundles now crop lines from the deskewed page exactly as recognition did, so training images
+  match model input on slanted pages; the manifest records each line's deskew angle.
+- Export dialogs suggest a file beside the project instead of the program's working folder (which was the
+  read-only system root on macOS). A page that cannot be displayed, for example on a disconnected drive,
+  now shows a message instead of leaving the window half-updated.
+- macOS DMGs include the license and third-party notices, and App Nap no longer slows transcription while
+  the window is in the background.
 
 - Removed KurrentBot, its optional language model, configuration, packaging hooks, documentation, and UI
   entry points after field use showed that curated in-app help did not justify its complexity or disk use.

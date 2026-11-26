@@ -9,14 +9,16 @@ Kurrentschrift. Manuskripte, Metadaten und Korrekturen bleiben auf dem eigenen R
 Das aktuelle Installationsprogramm steht auf der
 [GitHub-Releases-Seite](https://github.com/98JoHu/KurrentScholar/releases/latest) und über den
 [direkten Windows-Download](https://github.com/98JoHu/KurrentScholar/releases/latest/download/KurrentScholar-Setup-Windows-x64.exe)
-bereit. Die Datei ist derzeit nicht codesigniert; bitte URL und die veröffentlichte SHA-256-Prüfsumme
-kontrollieren. Beim ersten Start wird das getrennte, etwa 1,34 GB große Erkennungsmodell nach
+bereit. Die Windows-Datei ist derzeit nicht codesigniert; bitte URL und die veröffentlichte
+SHA-256-Prüfsumme kontrollieren. Für macOS 12 oder neuer gibt es signierte und notarisierte Pakete für
+[Apple Silicon (M1 oder neuer)](https://github.com/98JoHu/KurrentScholar/releases/latest/download/KurrentScholar-macOS-Apple-Silicon.dmg)
+und [Intel-Macs](https://github.com/98JoHu/KurrentScholar/releases/latest/download/KurrentScholar-macOS-Intel.dmg). Beim ersten Start wird das getrennte, etwa 1,34 GB große Erkennungsmodell nach
 ausdrücklicher Bestätigung heruntergeladen. Danach funktioniert die Transkription offline. Dokumente
 werden nicht hochgeladen.
 
 ## Arbeitsablauf
 
-1. Windows-Installationsdatei aus GitHub Releases herunterladen und Prüfsumme vergleichen.
+1. Windows-Installationsdatei oder macOS-Paket aus GitHub Releases herunterladen und Prüfsumme vergleichen.
 2. KurrentScholar starten und den einmaligen Modelldownload bestätigen.
 3. PDF-, PNG-, JPEG- oder TIFF-Datei öffnen und ein lokales Projekt anlegen.
 4. Aktuelle Seite, Seitenbereich oder gesamtes Dokument transkribieren; nur erkannte Zeilen werden an
@@ -33,8 +35,8 @@ Die derzeitige OpenCV-Zeilenerkennung trennt benachbarte Zeilen anhand ihrer Tin
 Unterlängen und Schnörkel nicht mehr ganze Textblöcke verbinden. Randnotizen, komplexe Spalten, Tabellen
 und gekrümmte Zeilen können weiterhin fehlen. Nach einer Aktualisierung der Zeilenerkennung legt
 **Re-segment** zuerst eine Sicherung des Projekts an. Auch hohe Modellkonfidenz garantiert keine
-richtige Lesung. Details stehen im [Projektplan](PLAN.md), in der [Datenschutzerklärung](docs/PRIVACY.md)
-und im [Benutzerhandbuch](docs/USER_GUIDE.md).
+richtige Lesung. Details stehen in der [Datenschutzerklärung](docs/PRIVACY.md), im
+[Benutzerhandbuch](docs/USER_GUIDE.md) und in der [Fehlerbehebung](docs/TROUBLESHOOTING.md).
 
 Das Erkennungsmodell `dh-unibe/trocr-kurrent` wurde unabhängig von Jonas Widmer und Tobias Hodel im
 Zusammenwirken mit den im Modellsteckbrief genannten Forschenden und Institutionen entwickelt. Es muss

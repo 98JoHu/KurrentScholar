@@ -9,6 +9,50 @@ from kurrentscholar.domain import BoundingBox
 from .base import DetectedLine
 
 
+def deskew_matrix(width: int, height: int, angle: float) -> np.ndarray:
+    """Affine transform that rotates a page about its centre by the stored deskew angle."""
+
+    return cv2.getRotationMatrix2D((width / 2.0, height / 2.0), angle, 1.0)
+
+
+def deskew_image(image: Image.Image, angle: float) -> Image.Image:
+    """Rotate a page exactly as line detection does before cropping lines for recognition."""
+
+    rgb = image.convert("RGB")
+    if not angle:
+        return rgb
+    return Image.fromarray(
+        cv2.warpAffine(
+            np.asarray(rgb),
+            deskew_matrix(rgb.width, rgb.height, angle),
+            (rgb.width, rgb.height),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(255, 255, 255),
+        )
+    )
+
+
+def recognition_crop(
+    deskewed: Image.Image,
+    polygon: list[tuple[float, float]],
+    angle: float,
+) -> Image.Image:
+    """Recreate the horizontal line crop given to the recognizer from stored source geometry.
+
+    ``polygon`` is the line outline on the unrotated page; mapping it forward with the page's
+    deskew transform yields the axis-aligned box that was cropped from the deskewed page.
+    """
+
+    points = np.array([[x, y, 1.0] for x, y in polygon], dtype=np.float64)
+    mapped = points @ deskew_matrix(deskewed.width, deskewed.height, angle).T
+    left = max(0, int(round(mapped[:, 0].min())))
+    top = max(0, int(round(mapped[:, 1].min())))
+    right = min(deskewed.width, int(round(mapped[:, 0].max())))
+    bottom = min(deskewed.height, int(round(mapped[:, 1].max())))
+    return deskewed.crop((left, top, max(left + 1, right), max(top + 1, bottom)))
+
+
 class ProjectionSegmenter:
     """Detect handwriting lines using ink-density peaks and separating valleys.
 
@@ -49,8 +93,7 @@ class ProjectionSegmenter:
         matrix: np.ndarray | None = None
         deskewed_image = image.convert("RGB")
         if self.last_deskew_angle:
-            centre = (width / 2.0, height / 2.0)
-            matrix = cv2.getRotationMatrix2D(centre, self.last_deskew_angle, 1.0)
+            matrix = deskew_matrix(width, height, self.last_deskew_angle)
             analysis = cv2.warpAffine(
                 analysis,
                 matrix,
@@ -60,17 +103,7 @@ class ProjectionSegmenter:
                 borderValue=0,
             )
             self._clear_scan_edges(analysis)
-            rgb = np.asarray(deskewed_image)
-            deskewed_image = Image.fromarray(
-                cv2.warpAffine(
-                    rgb,
-                    matrix,
-                    (width, height),
-                    flags=cv2.INTER_CUBIC,
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=(255, 255, 255),
-                )
-            )
+            deskewed_image = deskew_image(deskewed_image, self.last_deskew_angle)
 
         profile = np.count_nonzero(analysis, axis=1).astype(np.float32)
         smooth_profile = self._smooth(profile, height)

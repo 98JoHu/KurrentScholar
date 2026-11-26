@@ -8,6 +8,7 @@ from pathlib import Path
 from kurrentscholar import __version__
 from kurrentscholar.document_processing import DocumentRenderer
 from kurrentscholar.projects import ProjectDatabase
+from kurrentscholar.segmentation.projection import deskew_image, recognition_crop
 
 
 class GroundTruthError(ValueError):
@@ -90,13 +91,19 @@ def export_training_bundle(
             page = project.page(line.page_number)
             if not page:
                 raise GroundTruthError(f"Page {line.page_number} has no stored geometry.")
-            key = (line.page_number, int(page["dpi"]))
-            rendered = rendered_pages.get(key)
-            if rendered is None:
+            deskew_angle = float(page.get("deskew_angle") or 0.0)
+            key = (line.page_number, int(page["dpi"]), deskew_angle)
+            page_image = rendered_pages.get(key)
+            if page_image is None:
                 rendered = renderer.render(source, line.page_number - 1, dpi=key[1])
-                rendered_pages[key] = rendered
+                # Recognition saw lines cut from the deskewed page; training crops must match.
+                page_image = deskew_image(rendered.image, deskew_angle)
+                rendered_pages[key] = page_image
             box = line.bbox
-            crop = rendered.image.crop((box.x, box.y, box.right, box.bottom)).convert("RGB")
+            if deskew_angle and line.polygon:
+                crop = recognition_crop(page_image, line.polygon, deskew_angle)
+            else:
+                crop = page_image.crop((box.x, box.y, box.right, box.bottom))
             stem = f"page-{line.page_number:04d}_line-{line.reading_order + 1:04d}"
             image_name = f"lines/{stem}.png"
             label_name = f"lines/{stem}.gt.txt"
@@ -110,6 +117,7 @@ def export_training_bundle(
                 "page": line.page_number,
                 "line": line.reading_order + 1,
                 "bbox": [box.x, box.y, box.width, box.height],
+                "deskew_angle": deskew_angle,
                 "text": line.display_text,
             })
         archive.writestr(

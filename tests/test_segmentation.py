@@ -76,3 +76,31 @@ def test_slanted_page_is_deskewed_for_line_crops_and_keeps_rotated_overlays():
     assert all(len(line.polygon) == 4 for line in lines)
     assert any(abs(line.polygon[0][1] - line.polygon[1][1]) > 10 for line in lines)
 
+
+
+def test_stored_geometry_recreates_the_recognition_crop():
+    import numpy as np
+
+    from kurrentscholar.segmentation.projection import deskew_image, recognition_crop
+
+    image = Image.new("RGB", (800, 500), "white")
+    draw = ImageDraw.Draw(image)
+    for y in (110, 220, 330):
+        draw.rectangle((90, y, 710, y + 18), fill="black")
+    slanted = image.rotate(4.0, resample=Image.Resampling.BICUBIC, fillcolor="white")
+    segmenter = ProjectionSegmenter(minimum_height=5)
+    lines = segmenter.detect_lines(slanted)
+    angle = segmenter.last_deskew_angle
+    assert angle
+
+    deskewed = deskew_image(slanted, angle)
+    for line in lines:
+        rebuilt = recognition_crop(deskewed, list(line.polygon), angle)
+        assert abs(rebuilt.width - line.crop.width) <= 1
+        assert abs(rebuilt.height - line.crop.height) <= 1
+        width, height = min(rebuilt.width, line.crop.width), min(rebuilt.height, line.crop.height)
+        difference = np.abs(
+            np.asarray(rebuilt.crop((0, 0, width, height)), dtype=int)
+            - np.asarray(line.crop.crop((0, 0, width, height)), dtype=int)
+        )
+        assert difference.mean() < 2.0

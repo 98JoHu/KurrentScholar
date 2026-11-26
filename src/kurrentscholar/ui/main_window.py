@@ -82,6 +82,13 @@ LOGGER = logging.getLogger(f"{APP_NAME}.ui")
 TAG_PROPERTY = QTextFormat.UserProperty + 1
 TAG_COLOR_PROPERTY = QTextFormat.UserProperty + 2
 HIGHLIGHT_PROPERTY = QTextFormat.UserProperty + 3
+NEEDS_REVIEW_ROLE = Qt.UserRole + 1
+CONFIDENCE_COLORS = {
+    "moderate": "#FFF0C2",
+    "high_uncertainty": "#F7D8C4",
+    "very_high_uncertainty": "#F2B8B5",
+    "unavailable": "#E5E8EB",
+}
 TAG_COLORS = {
     "Person": "#F2C7C3",
     "Place": "#C9DDF7",
@@ -339,6 +346,9 @@ class MainWindow(QMainWindow):
         self._worker: ProcessingWorker | None = None
         self._processing_progress: QProgressDialog | None = None
         self._install_thread: QThread | None = None
+        # The download keeps its own manager: self.model_manager follows the open project and
+        # may change (transcription, model selection) while a download is still running.
+        self._install_manager: ModelManager | None = None
         self._install_worker: ModelInstallWorker | None = None
         self._install_progress: QProgressDialog | None = None
         self._install_progress_timer: QTimer | None = None
@@ -810,9 +820,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText(text)
 
     def _offer_model_installation(self) -> None:
-        if self.model_manager.status().installed or (
-            self._install_thread and self._install_thread.isRunning()
-        ):
+        if self.model_manager.status().installed or self._install_running():
             return
         dialog = QMessageBox(self)
         dialog.setIcon(QMessageBox.Information)
@@ -945,7 +953,19 @@ class MainWindow(QMainWindow):
         document = self.project.document()
         if not document:
             return
-        rendered = self.renderer.render(document["source_path"], self.current_page - 1, dpi=150)
+        try:
+            rendered = self.renderer.render(document["source_path"], self.current_page - 1, dpi=150)
+        except Exception as error:
+            # E.g. the source sits on a disconnected drive. Keep the project usable instead of
+            # leaving navigation or project opening half-finished.
+            LOGGER.error("Page %s could not be displayed\n%s", self.current_page, exception_details(error))
+            self.pixmap_item.setPixmap(QPixmap())
+            self._sync_display_scale_from_project_page()
+            message = f"Page {self.current_page} could not be displayed: {error}"
+            self.status_label.setText(message)
+            self.statusBar().showMessage(message, 15_000)
+            self._update_navigation_actions()
+            return
         qt_image = ImageQt(rendered.image)
         self.pixmap_item.setPixmap(QPixmap.fromImage(qt_image))
         self._sync_display_scale_from_project_page()
@@ -986,15 +1006,9 @@ class MainWindow(QMainWindow):
         selected_row = -1
         if self.project:
             for line in self.project.lines(self.current_page):
-                label = self.thresholds.classify(line.confidence)
-                item = QListWidgetItem(
-                    f"{line.reading_order + 1:03d}  [{label.value.replace('_', ' ')}]  {line.display_text}"
-                )
+                item = QListWidgetItem()
                 item.setData(Qt.UserRole, line.id)
-                color = {"moderate": "#FFF0C2", "high_uncertainty": "#F7D8C4",
-                         "very_high_uncertainty": "#F2B8B5", "unavailable": "#E5E8EB"}.get(label.value)
-                if color:
-                    item.setBackground(QBrush(QColor(color)))
+                self._describe_line_item(item, line)
                 self.line_list.addItem(item)
                 if line.id == selected_id:
                     selected_row = self.line_list.count() - 1
@@ -1395,6 +1409,12 @@ class MainWindow(QMainWindow):
         if self._thread and self._thread.isRunning():
             self._error("Transcription is active", "Wait for transcription to finish before installing a model.")
             return
+        if self._install_running():
+            self._error(
+                "A model download is active",
+                "Wait for the current model download to finish before installing another model.",
+            )
+            return
         self.model_manager = ModelManager(spec=spec)
         if self.model_manager.status().installed:
             QMessageBox.information(
@@ -1419,6 +1439,12 @@ class MainWindow(QMainWindow):
     def _remove_selected_model(self, spec: ModelSpec) -> None:
         if self._thread and self._thread.isRunning():
             self._error("Transcription is active", "Wait for transcription to finish before removing a model.")
+            return
+        if self._install_running():
+            self._error(
+                "A model download is active",
+                "Wait for the current model download to finish before removing a model.",
+            )
             return
         manager = ModelManager(spec=spec)
         if not manager.downloaded_bytes():
@@ -1472,15 +1498,19 @@ class MainWindow(QMainWindow):
             return
         self._change_recognition_model(current, selected)
 
+    def _install_running(self) -> bool:
+        return bool(self._install_thread and self._install_thread.isRunning())
+
     def _start_model_installation(self) -> None:
-        if self._install_thread and self._install_thread.isRunning():
+        if self._install_running():
             if self._install_progress:
                 self._install_progress.show()
                 self._install_progress.raise_()
             return
+        manager = self._install_manager = self.model_manager
         self.actions["Model Manager"].setEnabled(False)
         progress = QProgressDialog("Starting model download…", "Hide", 0, 1000, self)
-        progress.setWindowTitle(f"Installing {self.model_manager.spec.display_name}")
+        progress.setWindowTitle(f"Installing {manager.spec.display_name}")
         progress.setWindowModality(Qt.NonModal)
         progress.setAutoClose(False)
         progress.setValue(0)
@@ -1493,7 +1523,7 @@ class MainWindow(QMainWindow):
         self._install_progress_timer.timeout.connect(self._update_model_download_progress)
         self._install_progress_timer.start()
         self._install_thread = QThread(self)
-        self._install_worker = ModelInstallWorker(self.model_manager)
+        self._install_worker = ModelInstallWorker(manager)
         self._install_worker.moveToThread(self._install_thread)
         self._install_thread.started.connect(self._install_worker.run)
         self._install_worker.status.connect(self._model_install_status)
@@ -1525,7 +1555,8 @@ class MainWindow(QMainWindow):
     def _model_install_done(self) -> None:
         LOGGER.info("Model installation completion received on GUI thread")
         self._stop_install_progress_timer()
-        status = self.model_manager.status()
+        manager = self._install_manager or self.model_manager
+        status = manager.status()
         if not status.installed:
             self._model_install_failed(
                 "The model worker finished, but the verified installation marker is missing.",
@@ -1541,11 +1572,11 @@ class MainWindow(QMainWindow):
         self.actions["Model Manager"].setEnabled(True)
         if self._model_manager_dialog:
             self._model_manager_dialog.refresh()
-        self.status_label.setText(f"{self.model_manager.spec.display_name} installed and ready offline.")
+        self.status_label.setText(f"{manager.spec.display_name} installed and ready offline.")
         QMessageBox.information(
             self,
             "Model installation complete",
-            f"‘{self.model_manager.spec.display_name}’ was downloaded, verified, and is ready. "
+            f"‘{manager.spec.display_name}’ was downloaded, verified, and is ready. "
             "It can now run without an internet connection.",
         )
 
@@ -1577,13 +1608,15 @@ class MainWindow(QMainWindow):
         LOGGER.info("Model installation thread stopped")
         self._install_worker = None
         self._install_thread = None
+        self._install_manager = None
 
     @Slot()
     def _update_model_download_progress(self) -> None:
-        if not self._install_progress or self._install_phase != "download":
+        manager = self._install_manager
+        if not manager or not self._install_progress or self._install_phase != "download":
             return
-        downloaded = self.model_manager.downloaded_bytes()
-        required = self.model_manager.spec.required_bytes
+        downloaded = manager.downloaded_bytes()
+        required = manager.spec.required_bytes
         value = min(999, int(downloaded * 1000 / required))
         self._install_progress.setValue(value)
         gib = downloaded / (1024 ** 3)
@@ -1827,18 +1860,35 @@ class MainWindow(QMainWindow):
         if self.project.correct_line(self.current_line_id, text, annotations):
             self.current_line_text = text
             self.current_line_annotations = annotations
-            current = next(
-                (
-                    self.line_list.item(row)
-                    for row in range(self.line_list.count())
-                    if int(self.line_list.item(row).data(Qt.UserRole)) == self.current_line_id
-                ),
-                None,
-            )
-            if current:
-                line = self.project.line(self.current_line_id)
-                label = self.thresholds.classify(line.confidence).value.replace("_", " ")
-                current.setText(f"{line.reading_order + 1:03d}  [{label}]  {line.display_text}")
+            self._update_line_item(self.current_line_id)
+
+    def _describe_line_item(self, item: QListWidgetItem, line) -> None:
+        """Show order, confidence band, verification, and problems for one listed line."""
+
+        label = self.thresholds.classify(line.confidence).value
+        verified = line.review_status == ReviewStatus.VERIFIED
+        mark = "✓ " if verified else ""
+        item.setText(f"{line.reading_order + 1:03d}  {mark}[{label.replace('_', ' ')}]  {line.display_text}")
+        item.setData(NEEDS_REVIEW_ROLE, not verified and label != "higher")
+        color = CONFIDENCE_COLORS.get(label)
+        item.setBackground(QBrush(QColor(color)) if color else QBrush())
+        notes = []
+        if verified:
+            notes.append("Manually verified.")
+        if line.recognition_error:
+            notes.append(f"Recognition failed: {line.recognition_error}")
+        if line.truncated:
+            notes.append("The model stopped at its length limit; the end of this line may be missing.")
+        item.setToolTip("\n".join(notes))
+
+    def _update_line_item(self, line_id: int) -> None:
+        if not self.project:
+            return
+        for row in range(self.line_list.count()):
+            item = self.line_list.item(row)
+            if int(item.data(Qt.UserRole)) == line_id:
+                self._describe_line_item(item, self.project.line(line_id))
+                return
 
     @Slot()
     def _verify_line(self) -> None:
@@ -1846,16 +1896,17 @@ class MainWindow(QMainWindow):
             # Verification must apply to the text on screen, not a pending autosave.
             self.save_current_edit()
             self.project.set_review_status(self.current_line_id, ReviewStatus.VERIFIED)
+            self._update_line_item(self.current_line_id)
             self.status_label.setText("Selected line marked as manually verified.")
 
     @Slot()
     def _next_uncertain(self) -> None:
         start = self.line_list.currentRow() + 1
         for row in range(start, self.line_list.count()):
-            if "[higher]" not in self.line_list.item(row).text():
+            if self.line_list.item(row).data(NEEDS_REVIEW_ROLE):
                 self.line_list.setCurrentRow(row)
                 return
-        self.status_label.setText("No later uncertain line on this page.")
+        self.status_label.setText("No later unverified uncertain line on this page.")
 
     @Slot()
     def evaluate_corrections(self) -> None:
@@ -1891,6 +1942,14 @@ class MainWindow(QMainWindow):
         dialog.setDetailedText(json.dumps(report, ensure_ascii=False, indent=2))
         dialog.exec()
 
+    def _export_default_path(self, suffix: str) -> str:
+        """Suggest a file beside the project; a bare name would resolve against the working
+        directory, which is "/" for a Finder-launched Mac app and the install folder on Windows."""
+
+        if self.project_path:
+            return str(self.project_path.with_name(f"{self.project_path.stem}{suffix}"))
+        return str(Path.home() / f"transcription{suffix}")
+
     @Slot()
     def export_project(self, requested_suffix: str | None = None) -> None:
         if not self.project:
@@ -1909,7 +1968,7 @@ class MainWindow(QMainWindow):
         suffix = requested_suffix if requested_suffix in formats else ".txt"
         description, file_filter = formats[suffix]
         filename, selected = QFileDialog.getSaveFileName(
-            self, f"Export {description}", f"transcription{suffix}", file_filter
+            self, f"Export {description}", self._export_default_path(f"{suffix}"), file_filter
         )
         if not filename:
             return
@@ -1956,7 +2015,10 @@ class MainWindow(QMainWindow):
             self._error("Invalid page range", str(error))
             return
         destination, _ = QFileDialog.getSaveFileName(
-            self, "Export ground-truth bundle", "kurrentscholar-ground-truth.zip", "ZIP archive (*.zip)"
+            self,
+            "Export ground-truth bundle",
+            self._export_default_path("-ground-truth.zip"),
+            "ZIP archive (*.zip)",
         )
         if not destination:
             return
@@ -2013,7 +2075,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def closeEvent(self, event) -> None:
-        if self._install_thread and self._install_thread.isRunning():
+        if self._install_running():
             QMessageBox.information(
                 self,
                 "Model installation is active",

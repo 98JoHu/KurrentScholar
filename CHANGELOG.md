@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.3 — 2026-11-26
 
 - Fixed line detection merging two to four neighbouring lines into one box on densely written pages. Weak
   profile peaks were merged within a fixed distance of 1/30 of the page height, which exceeds the line
@@ -12,6 +12,8 @@
 - The line detector version is now 4. Projects processed with an older detector are offered the existing
   backup-and-re-segment step before further transcription, so old and new boxes are never mixed.
 - Fixed the macOS CI failure of the tutorial layout test, which depended on platform font metrics.
+  This failure prevented macOS DMGs for 1.1.2; 1.1.3 is the first release containing the 1.1.2 changes
+  for both Windows and macOS.
 
 ## 1.1.2 — 2026-11-26
 

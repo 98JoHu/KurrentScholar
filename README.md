@@ -132,7 +132,7 @@ recognition model recorded in the project or export. GitHub's **Cite this reposi
   author       = {Hummel, Jonas and Lepold, Philipp},
   title        = {KurrentScholar: Offline Historical Kurrent Handwriting Transcription},
   year         = {2026},
-  version      = {1.1.2},
+  version      = {1.1.3},
   institution  = {Karlsruhe Institute of Technology (KIT)},
   url          = {https://github.com/98JoHu/KurrentScholar},
   license      = {MIT}

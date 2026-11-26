@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.4 — 2026-11-26
 
 - Added an editable reading order. Drag a line in the line list, or use **Review > Reading order > Move
   line up/down** (Alt/⌥+↑/↓), for example to read a marginal note after the main text beside it. Line boxes

@@ -391,5 +391,5 @@ class ModelManagerDialog(QDialog):
         self.install.setEnabled(bool(spec and not status.installed))
         self.remove.setEnabled(bool(spec and manager.downloaded_bytes()))
         self.select.setEnabled(bool(
-            spec and spec.kind == "recognition" and status.installed and self.project_model is not None
+            spec and status.installed and self.project_model is not None
         ))

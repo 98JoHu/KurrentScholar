@@ -3,10 +3,10 @@
 - **Model download stops:** retry; completed files should resume. Check internet access and at least 1.8 GB
   free storage. No project data is changed by model installation. The error dialog identifies common TLS,
   proxy, firewall, permission, and timeout failures. Technical details are saved in
-  `%LOCALAPPDATA%\KurrentScholar\Logs\kurrentscholar.log`.
+  `%LOCALAPPDATA%\KurrentScholar\Logs\kurrentscholar.log` (macOS: `~/Library/Logs/KurrentScholar/`).
 - **The interface stops responding:** wait at least 15 seconds, then close it if necessary. The GUI watchdog
   records all Python thread stacks in `kurrentscholar.log`, while fatal Python/native failures are written
-  to `%LOCALAPPDATA%\KurrentScholar\Logs\kurrentscholar-crash.log`. The **Diagnostic log** toolbar action
+  to `kurrentscholar-crash.log` in the same folder. **Help > Diagnostic log**
   shows both paths. Include both files with a bug report.
 - **Transcription is slow:** CPU inference of a 334M-parameter model is substantial. Process fewer pages;
   do not rely on unmeasured time estimates. The diagnostic log records the CPUs available to the process,

@@ -23,12 +23,8 @@ datas = (
     + collect_data_files("certifi")
     + copy_metadata("huggingface-hub")
     + copy_metadata("transformers")
-    + [
-        (
-            str(root / "src" / "kurrentscholar" / "assets" / "kurrentscholar-logo.png"),
-            "kurrentscholar/assets",
-        )
-    ]
+    # Application icon and stylesheet images (spin box arrows).
+    + [(str(root / "src" / "kurrentscholar" / "assets"), "kurrentscholar/assets")]
 )
 binaries = collect_dynamic_libs("torch") + collect_dynamic_libs("pypdfium2")
 hiddenimports = [

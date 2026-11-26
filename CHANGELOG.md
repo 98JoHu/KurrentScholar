@@ -2,6 +2,22 @@
 
 ## 1.1.0 — unreleased
 
+- Fixed invisible text on macOS in Dark Mode: the line list, editor, menus, and inputs rendered light text
+  on the light interface. The application now requests the light color scheme and sets explicit text colors.
+- Live transcription no longer moves the reviewer's text cursor or line-list scroll position each time a
+  new line is saved on the page being corrected.
+- Spin-box arrows (page selector, text size) are drawn with bundled images, so they no longer appear
+  broken on macOS.
+- Keyboard shortcuts now work the same way on Windows and macOS and on German keyboards: superscript and
+  subscript use Ctrl/⌘+. and Ctrl/⌘+, , clear formatting uses Ctrl/⌘+Shift+Space (Cmd+Space opens
+  Spotlight), next uncertain line adds Ctrl/⌘+Shift+N, and Fit page gains Ctrl/⌘+0. Previous shortcuts
+  remain as alternates. Tooltips and messages show the platform's own key names.
+- Removed unused code: the image preprocessing module, an unused segmentation protocol, page rotation
+  support, constant aliases, never-used model, status, and export options, and the never-populated project
+  metadata (the always-empty `metadata` key is no longer written to research JSON).
+- Marking a line verified now saves its pending edit first. Messages that referred to the removed
+  "Install model" button now point to **Models > Model Manager**; documentation lists macOS log locations.
+
 - Removed KurrentBot, its optional language model, configuration, packaging hooks, documentation, and UI
   entry points after field use showed that curated in-app help did not justify its complexity or disk use.
 - Removed duplicate Export and Save toolbar controls. Export remains a clear top-level menu, Save retains

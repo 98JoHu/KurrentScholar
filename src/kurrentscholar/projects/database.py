@@ -246,16 +246,15 @@ class ProjectDatabase:
         width: int,
         height: int,
         dpi: int,
-        rotation: int = 0,
         deskew_angle: float = 0.0,
         status: str = "segmented",
         error: str | None = None,
     ) -> None:
         with self.connection:
             self.connection.execute(
-                """INSERT INTO pages(page_number,width,height,dpi,rotation,deskew_angle,segmentation_status,segmentation_error,processed_at)
-                   VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(page_number) DO UPDATE SET
-                   width=excluded.width,height=excluded.height,dpi=excluded.dpi,rotation=excluded.rotation,
+                """INSERT INTO pages(page_number,width,height,dpi,deskew_angle,segmentation_status,segmentation_error,processed_at)
+                   VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(page_number) DO UPDATE SET
+                   width=excluded.width,height=excluded.height,dpi=excluded.dpi,
                    deskew_angle=excluded.deskew_angle,
                    segmentation_status=excluded.segmentation_status,segmentation_error=excluded.segmentation_error,
                    processed_at=excluded.processed_at""",
@@ -264,7 +263,6 @@ class ProjectDatabase:
                     width,
                     height,
                     dpi,
-                    rotation,
                     float(deskew_angle),
                     status,
                     error,
@@ -397,16 +395,6 @@ class ProjectDatabase:
                 "UPDATE lines SET review_status=?,updated_at=? WHERE id=?",
                 (status.value, utc_now(), line_id),
             )
-
-    def set_metadata(self, values: dict[str, str]) -> None:
-        with self.connection:
-            self.connection.executemany(
-                "INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                values.items(),
-            )
-
-    def metadata(self) -> dict[str, str]:
-        return dict(self.connection.execute("SELECT key,value FROM metadata"))
 
     def set_info(self, values: dict[str, str]) -> None:
         with self.connection:

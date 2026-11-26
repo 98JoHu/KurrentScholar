@@ -14,7 +14,6 @@ class RenderedPage:
     page_index: int
     image: Image.Image
     dpi: int
-    rotation: int = 0
 
 
 class DocumentRenderer:
@@ -37,11 +36,9 @@ class DocumentRenderer:
             return 1
         raise ValueError("Choose a PDF, PNG, JPEG, or TIFF file")
 
-    def render(self, path: str | Path, page_index: int, dpi: int = 300, rotation: int = 0) -> RenderedPage:
+    def render(self, path: str | Path, page_index: int, dpi: int = 300) -> RenderedPage:
         if not 72 <= dpi <= 600:
             raise ValueError("Rendering resolution must be between 72 and 600 DPI")
-        if rotation % 90:
-            raise ValueError("Rotation must be a multiple of 90 degrees")
         source = Path(path)
         if source.suffix.lower() == ".pdf":
             image = self._render_pdf(source, page_index, dpi)
@@ -57,10 +54,7 @@ class DocumentRenderer:
             raise ValueError("Invalid page number or unsupported document format")
         if image.width * image.height > MAX_IMAGE_PIXELS:
             raise ValueError("The rendered page is too large; lower the DPI setting")
-        normalized_rotation = rotation % 360
-        if normalized_rotation:
-            image = image.rotate(-normalized_rotation, expand=True, fillcolor="white")
-        return RenderedPage(page_index, image, dpi, normalized_rotation)
+        return RenderedPage(page_index, image, dpi)
 
     @staticmethod
     def _render_pdf(source: Path, page_index: int, dpi: int) -> Image.Image:

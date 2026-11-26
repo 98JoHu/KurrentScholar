@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QKeySequence,
+    QPainter,
     QPen,
     QPixmap,
     QPolygonF,
@@ -54,12 +56,11 @@ from kurrentscholar.constants import (
     ModelSpec,
     find_model,
 )
-from kurrentscholar.diagnostics import exception_details, log_path
+from kurrentscholar.diagnostics import CRASH_LOG_FILE_NAME, exception_details, log_path
 from kurrentscholar.document_processing import DocumentRenderer, PageRangeError, parse_page_range
 from kurrentscholar.domain import ConfidenceThresholds, ReviewStatus
 from kurrentscholar.evaluation import evaluate_project_lines
 from kurrentscholar.exports import (
-    ExportOptions,
     export_csv,
     export_docx,
     export_json,
@@ -88,6 +89,24 @@ TAG_COLORS = {
     "Date": "#CDE8D2",
     "Unclear": "#FFE7A8",
 }
+# Qt maps "Ctrl" to the Command key on macOS. Shortcuts avoid keys that are reserved
+# by macOS (Cmd+Space), need Fn on Mac keyboards (F-keys), or need Shift on German
+# layouts ("="). The first sequence is shown in menus and tooltips; later ones are
+# retained so earlier habits keep working where the platform allows them.
+SHORTCUTS: dict[str, tuple[str, ...]] = {
+    "superscript": ("Ctrl+.", "Ctrl+Shift+="),
+    "subscript": ("Ctrl+,", "Ctrl+="),
+    "clear_format": ("Ctrl+Shift+Space", "Ctrl+Space"),
+    "next_uncertain": ("Ctrl+Shift+N", "F6"),
+}
+
+
+def shortcut_text(sequence: str | QKeySequence.StandardKey) -> str:
+    """Render a shortcut the way the platform displays it (Ctrl+S or ⌘S)."""
+
+    return QKeySequence(sequence).toString(QKeySequence.NativeText)
+
+
 SPECIAL_CHARACTERS = (
     "ä", "ö", "ü", "Ä", "Ö", "Ü", "ß", "ẞ", "ſ", "æ", "Æ", "œ", "Œ",
     "§", "¶", "†", "‡", "°", "№", "½", "¼", "¾", "–", "—", "…",
@@ -171,7 +190,6 @@ class ProcessingWorker(QObject):
                 recognizer = TrOCRBackend(
                     self.model_path,
                     max_new_tokens=self.model_spec.max_new_tokens,
-                    model_id=self.model_spec.model_id,
                 )
                 LOGGER.info("Loading recognition model from %s", self.model_path)
                 recognizer.load()
@@ -351,7 +369,12 @@ class MainWindow(QMainWindow):
         self.viewer = QGraphicsView(self.scene)
         self.viewer.setObjectName("documentViewer")
         self.viewer.setDragMode(QGraphicsView.ScrollHandDrag)
-        self.viewer.setRenderHints(self.viewer.renderHints())
+        # Smooth scaling keeps fine pen strokes legible when the page is zoomed out.
+        self.viewer.setRenderHints(
+            self.viewer.renderHints()
+            | QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
         self.pixmap_item = QGraphicsPixmapItem()
         self.scene.addItem(self.pixmap_item)
 
@@ -369,11 +392,13 @@ class MainWindow(QMainWindow):
         self.editor.textChanged.connect(self._schedule_autosave)
         self.superscript_button = QPushButton("x²")
         self.superscript_button.setCheckable(True)
-        self.superscript_button.setToolTip("Superscript (Ctrl+Shift+=)")
+        self.superscript_button.setToolTip(
+            f"Superscript ({shortcut_text(SHORTCUTS['superscript'][0])})"
+        )
         self.superscript_button.clicked.connect(lambda: self._toggle_vertical_format("superscript"))
         self.subscript_button = QPushButton("x₂")
         self.subscript_button.setCheckable(True)
-        self.subscript_button.setToolTip("Subscript (Ctrl+=)")
+        self.subscript_button.setToolTip(f"Subscript ({shortcut_text(SHORTCUTS['subscript'][0])})")
         self.subscript_button.clicked.connect(lambda: self._toggle_vertical_format("subscript"))
         highlight = QPushButton("Highlight")
         highlight.setToolTip("Highlight the selected text")
@@ -455,18 +480,19 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             """
             QMainWindow { background: #F4F7FB; color: #20252B; }
-            QMenuBar { background: #FFFFFF; padding: 4px 8px; border-bottom: 1px solid #E2E7ED; }
+            QMenuBar { background: #FFFFFF; color: #20252B; padding: 4px 8px; border-bottom: 1px solid #E2E7ED; }
             QMenuBar::item { padding: 7px 10px; border-radius: 7px; }
             QMenuBar::item:selected { background: #F0E7E6; }
-            QMenu { background: #FFFFFF; border: 1px solid #DDE3EA; padding: 6px; }
+            QMenu { background: #FFFFFF; color: #20252B; border: 1px solid #DDE3EA; padding: 6px; }
             QMenu::item { padding: 7px 26px 7px 10px; border-radius: 6px; }
             QMenu::item:selected { background: #F0E7E6; color: #5E3F3C; }
+            QMenu::item:disabled { color: #9AA2AB; }
             QToolBar { background: #FFFFFF; border: 0; border-bottom: 1px solid #E2E7ED; spacing: 6px; padding: 7px 10px; }
             QToolButton, QPushButton { background: #F0E7E6; color: #5E3F3C; border: 1px solid #DECBC9; border-radius: 10px; padding: 7px 12px; font-weight: 600; }
             QToolButton:hover, QPushButton:hover { background: #E7D7D5; }
             QToolButton:pressed, QPushButton:pressed { background: #D9C2BF; }
             QToolButton:disabled, QPushButton:disabled { background: #EEF0F3; color: #9AA2AB; border-color: #E1E5E9; }
-            QGraphicsView, QListWidget, QTextEdit, QTextBrowser, QTableWidget, QLineEdit { background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 12px; selection-background-color: #DCC8C5; selection-color: #20252B; }
+            QGraphicsView, QListWidget, QTextEdit, QTextBrowser, QTableWidget, QLineEdit { background: #FFFFFF; color: #20252B; border: 1px solid #DDE3EA; border-radius: 12px; selection-background-color: #DCC8C5; selection-color: #20252B; }
             QGraphicsView { margin: 8px 4px 8px 8px; }
             QWidget#reviewCard { background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 18px; }
             QLabel#contextStatus { color: #56616D; padding: 8px 4px; }
@@ -477,12 +503,32 @@ class MainWindow(QMainWindow):
             QScrollArea#tutorialBodyScroll { background: transparent; border: none; }
             QScrollArea#tutorialBodyScroll > QWidget > QWidget { background: transparent; }
             QLabel#tutorialProgress { color: #7A858F; font-weight: 600; }
-            QSpinBox { background: #FFFFFF; border: 1px solid #DDE3EA; border-radius: 9px; padding: 6px 8px; min-width: 112px; }
+            QSpinBox { background: #FFFFFF; color: #20252B; border: 1px solid #DDE3EA; border-radius: 9px; padding: 6px 24px 6px 8px; min-width: 112px; }
+            QSpinBox::up-button, QSpinBox::down-button { subcontrol-origin: border; width: 20px; background: #F0E7E6; border-left: 1px solid #DECBC9; }
+            QSpinBox::up-button { subcontrol-position: top right; border-top-right-radius: 9px; }
+            QSpinBox::down-button { subcontrol-position: bottom right; border-bottom-right-radius: 9px; border-top: 1px solid #DECBC9; }
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: #E7D7D5; }
             QProgressDialog { background: #F4F7FB; }
+            QProgressDialog QLabel { color: #20252B; }
             QHeaderView::section { background: #F0E7E6; color: #5E3F3C; padding: 7px; border: 0; border-right: 1px solid #DECBC9; font-weight: 600; }
             QStatusBar { background: #FFFFFF; border-top: 1px solid #E2E7ED; color: #68737E; }
             """
+            + self._spin_arrow_style()
         )
+
+    @staticmethod
+    def _spin_arrow_style() -> str:
+        """Image arrows for styled spin boxes; Qt draws none once the buttons are styled."""
+
+        assets = (Path(__file__).resolve().parent.parent / "assets").as_posix()
+        rules = []
+        for direction in ("up", "down"):
+            arrow = f"QSpinBox::{direction}-arrow"
+            rules.append(f'{arrow} {{ image: url("{assets}/spin-{direction}.png"); width: 10px; height: 6px; }}')
+            rules.append(
+                f'{arrow}:disabled, {arrow}:off {{ image: url("{assets}/spin-{direction}-disabled.png"); }}'
+            )
+        return "\n".join(rules)
 
     def _run_onboarding(self) -> None:
         settings = QSettings()
@@ -531,7 +577,9 @@ class MainWindow(QMainWindow):
             ),
             (
                 "Export your work",
-                "Use the dedicated Export menu. Choose plain text, Word, CSV, "
+                "Use the Export menu in the menu bar"
+                f"{' at the top of the screen' if sys.platform == 'darwin' else ''}. "
+                "Choose plain text, Word, CSV, "
                 "Excel, or research JSON; verified line crops for external fine-tuning are available "
                 "there as a separate ground-truth bundle.",
                 self._tutorial_targets.get("export"),
@@ -561,7 +609,9 @@ class MainWindow(QMainWindow):
         def action(name, callback, shortcut=None, tip=""):
             created = QAction(name, self)
             created.triggered.connect(callback)
-            if shortcut:
+            if isinstance(shortcut, tuple):
+                created.setShortcuts([QKeySequence(sequence) for sequence in shortcut])
+            elif shortcut:
                 created.setShortcut(shortcut)
             if tip:
                 created.setStatusTip(tip)
@@ -576,23 +626,23 @@ class MainWindow(QMainWindow):
         current = action("Transcribe current page", self.transcribe_current_page, "Ctrl+T")
         page_range = action("Transcribe page range…", self.transcribe_page_range, "Ctrl+Shift+T")
         all_pages = action("Transcribe full document", self.transcribe_all)
-        self.actions["Transcribe"] = all_pages  # compatibility with earlier UI/tests
         resegment = action("Re-segment", self.resegment)
         select_model = action("Recognition model", self.select_recognition_model)
         manage_models = action("Model Manager", self.show_model_manager)
-        self.actions["Install model"] = manage_models
         save = action("Save", self.save_current_edit, QKeySequence.Save)
         autosave = action("Auto Save", self._set_autosave)
         autosave.setCheckable(True)
         autosave.setChecked(self.autosave_enabled)
         autosave.setStatusTip("Save shortly after typing; enabled by default")
         verify = action("Mark selected line verified", self._verify_line, "Ctrl+Shift+V")
-        uncertain = action("Next uncertain line", self._next_uncertain, "F6")
+        uncertain = action("Next uncertain line", self._next_uncertain, SHORTCUTS["next_uncertain"])
         evaluate = action("Evaluate corrections", self.evaluate_corrections)
         ground_truth = action("Export ground-truth bundle…", self.export_ground_truth_bundle)
         zoom_in = action("Zoom in", lambda: self.viewer.scale(1.2, 1.2), QKeySequence.ZoomIn)
         zoom_out = action("Zoom out", lambda: self.viewer.scale(1 / 1.2, 1 / 1.2), QKeySequence.ZoomOut)
-        zoom_fit = action("Fit page", lambda: self.viewer.fitInView(self.pixmap_item, Qt.KeepAspectRatio))
+        zoom_fit = action(
+            "Fit page", lambda: self.viewer.fitInView(self.pixmap_item, Qt.KeepAspectRatio), "Ctrl+0"
+        )
         tutorial = action("Tutorial", self.show_tutorial)
         diagnostic = action("Diagnostic log", self.show_diagnostic_log)
         about = action("About", self.about)
@@ -627,18 +677,18 @@ class MainWindow(QMainWindow):
             action(
                 "Superscript",
                 lambda: self._toggle_vertical_format("superscript"),
-                "Ctrl+Shift+=",
+                SHORTCUTS["superscript"],
             )
         )
         formatting_menu.addAction(
             action(
                 "Subscript",
                 lambda: self._toggle_vertical_format("subscript"),
-                "Ctrl+=",
+                SHORTCUTS["subscript"],
             )
         )
         formatting_menu.addAction(
-            action("Clear text formatting", self._clear_selection_format, "Ctrl+Space")
+            action("Clear text formatting", self._clear_selection_format, SHORTCUTS["clear_format"])
         )
 
         models_menu = self.menuBar().addMenu("&Models")
@@ -672,7 +722,7 @@ class MainWindow(QMainWindow):
         self.page_selector.setPrefix("Page ")
         self.page_selector.setRange(1, 1)
         self.page_selector.setEnabled(False)
-        self.page_selector.setToolTip("Go directly to a page (Ctrl+G)")
+        self.page_selector.setToolTip(f"Go directly to a page ({shortcut_text('Ctrl+G')})")
         self.page_selector.valueChanged.connect(self._go_to_page)
         toolbar.addWidget(self.page_selector)
         toolbar.addSeparator()
@@ -744,7 +794,8 @@ class MainWindow(QMainWindow):
         else:
             self._edit_timer.stop()
             self.statusBar().showMessage(
-                "Auto Save is off. Use Ctrl+S; edits are still protected when changing context or closing.",
+                f"Auto Save is off. Use {shortcut_text(QKeySequence.Save)}; edits are still protected "
+                "when changing context or closing.",
                 7_000,
             )
 
@@ -753,8 +804,9 @@ class MainWindow(QMainWindow):
         if status.installed:
             text = "Handwriting model installed. Open a PDF or archival image to begin."
         else:
-            text = ("Welcome. The separate 1.34 GB handwriting model is not installed. Choose ‘Install model’ "
-                    "once while online; documents are never uploaded and later transcription is offline.")
+            text = ("Welcome. The separate 1.34 GB handwriting model is not installed. Install it once "
+                    "while online from Models > Model Manager; documents are never uploaded and later "
+                    "transcription is offline.")
         self.status_label.setText(text)
 
     def _offer_model_installation(self) -> None:
@@ -916,6 +968,11 @@ class MainWindow(QMainWindow):
         selected_id = self.current_line_id if preserve_selection else None
         if preserve_selection:
             self.save_current_edit()
+        # Live transcription refreshes the list after every saved line; keep the
+        # reviewer's caret and scroll position so ongoing corrections are not disrupted.
+        editor_cursor = self.editor.textCursor()
+        cursor_anchor, cursor_position = editor_cursor.anchor(), editor_cursor.position()
+        list_scroll = self.line_list.verticalScrollBar().value()
         self.line_list.blockSignals(True)
         self._edit_timer.stop()
         self.current_line_id = None
@@ -960,8 +1017,14 @@ class MainWindow(QMainWindow):
                 self.scene.addItem(overlay)
                 self._overlays.append(overlay)
         self.line_list.blockSignals(False)
+        self.line_list.verticalScrollBar().setValue(list_scroll)
         if selected_row >= 0:
             self.line_list.setCurrentRow(selected_row)
+            length = len(self.editor.toPlainText())
+            restored = self.editor.textCursor()
+            restored.setPosition(min(cursor_anchor, length))
+            restored.setPosition(min(cursor_position, length), QTextCursor.KeepAnchor)
+            self.editor.setTextCursor(restored)
         else:
             self.editor.blockSignals(True)
             self.editor.clear()
@@ -1013,11 +1076,18 @@ class MainWindow(QMainWindow):
         if selected == current:
             self.status_label.setText(f"Recognition model: {current.display_name}")
             return
+        self._change_recognition_model(current, selected)
+
+    def _change_recognition_model(self, current: ModelSpec, selected: ModelSpec) -> None:
+        """Assign an installed model to the open project, backing up results it replaces."""
+
+        if not self.project:
+            return
         manager = ModelManager(spec=selected)
         if not manager.status().installed:
             self._error(
                 "The selected model is not installed",
-                f"Choose Install model, install ‘{selected.display_name}’, then select it again. "
+                f"Install ‘{selected.display_name}’ in Models > Model Manager, then select it again. "
                 "No project data was changed.",
             )
             return
@@ -1037,10 +1107,9 @@ class MainWindow(QMainWindow):
         self.status_label.setText(
             f"Recognition model changed to {selected.display_name}. Choose Transcribe to process the document."
         )
-
-    @Slot()
-    def transcribe(self) -> None:
-        self.transcribe_all()
+        if self._model_manager_dialog:
+            self._model_manager_dialog.project_model = selected
+            self._model_manager_dialog.refresh()
 
     @Slot()
     def transcribe_current_page(self) -> None:
@@ -1124,7 +1193,7 @@ class MainWindow(QMainWindow):
             "Re-segmentation replaces all current boxes and transcriptions."
         ):
             return
-        self.transcribe()
+        self.transcribe_all()
 
     def _backup_and_reset_transcription(
         self,
@@ -1293,7 +1362,7 @@ class MainWindow(QMainWindow):
         for name in (
             "Open document",
             "Open project",
-            "Transcribe",
+            "Transcribe full document",
             "Transcribe current page",
             "Transcribe page range…",
             "Re-segment",
@@ -1301,10 +1370,6 @@ class MainWindow(QMainWindow):
             "Model Manager",
         ):
             self.actions[name].setEnabled(not busy)
-
-    @Slot()
-    def install_model(self) -> None:
-        self.show_model_manager()
 
     @Slot()
     def show_model_manager(self) -> None:
@@ -1403,27 +1468,9 @@ class MainWindow(QMainWindow):
         except ValueError as error:
             self._error("The project model is unavailable", str(error))
             return
-        if selected.kind != "recognition" or selected == current:
+        if selected == current:
             return
-        if not ModelManager(spec=selected).status().installed:
-            self._error("The selected model is not installed", "Install it first.")
-            return
-        summary = self.project.transcription_summary()
-        if summary["line_count"] and not self._backup_and_reset_transcription(
-            f"Changing from ‘{current.display_name}’ to ‘{selected.display_name}’ requires "
-            "replacing the current machine transcription.",
-            operation="change recognition model",
-            backup_suffix="before-model-change",
-        ):
-            return
-        self.project.set_info({"model_id": selected.model_id, "model_revision": selected.revision})
-        self.model_manager = ModelManager(spec=selected)
-        self.status_label.setText(
-            f"Recognition model changed to {selected.display_name}. Choose pages to transcribe."
-        )
-        if self._model_manager_dialog:
-            self._model_manager_dialog.project_model = selected
-            self._model_manager_dialog.refresh()
+        self._change_recognition_model(current, selected)
 
     def _start_model_installation(self) -> None:
         if self._install_thread and self._install_thread.isRunning():
@@ -1431,7 +1478,7 @@ class MainWindow(QMainWindow):
                 self._install_progress.show()
                 self._install_progress.raise_()
             return
-        self.actions["Install model"].setEnabled(False)
+        self.actions["Model Manager"].setEnabled(False)
         progress = QProgressDialog("Starting model download…", "Hide", 0, 1000, self)
         progress.setWindowTitle(f"Installing {self.model_manager.spec.display_name}")
         progress.setWindowModality(Qt.NonModal)
@@ -1491,7 +1538,7 @@ class MainWindow(QMainWindow):
             self._install_progress.close()
         self._install_progress = None
         self._install_phase = "idle"
-        self.actions["Install model"].setEnabled(True)
+        self.actions["Model Manager"].setEnabled(True)
         if self._model_manager_dialog:
             self._model_manager_dialog.refresh()
         self.status_label.setText(f"{self.model_manager.spec.display_name} installed and ready offline.")
@@ -1509,13 +1556,13 @@ class MainWindow(QMainWindow):
             self._install_progress.close()
         self._install_progress = None
         self._install_phase = "idle"
-        self.actions["Install model"].setEnabled(True)
+        self.actions["Model Manager"].setEnabled(True)
         if self._model_manager_dialog:
             self._model_manager_dialog.refresh()
         LOGGER.error("Model installation failed: %s\n%s", message, details)
         self._error(
             "The model installation did not finish",
-            f"No project data was affected. {message}\n\nYou can retry from the Install model button.",
+            f"No project data was affected. {message}\n\nYou can retry from Models > Model Manager.",
             f"Diagnostic log: {log_path()}\n\n{details}",
         )
 
@@ -1734,7 +1781,7 @@ class MainWindow(QMainWindow):
             return
         self.save_current_edit()
         self.current_line_id = int(current.data(Qt.UserRole))
-        line = next(item for item in self.project.lines(self.current_page) if item.id == self.current_line_id)
+        line = self.project.line(self.current_line_id)
         self.current_line_text = line.display_text
         self.current_line_annotations = line.annotations
         self.editor.blockSignals(True)
@@ -1796,6 +1843,8 @@ class MainWindow(QMainWindow):
     @Slot()
     def _verify_line(self) -> None:
         if self.project and self.current_line_id is not None:
+            # Verification must apply to the text on screen, not a pending autosave.
+            self.save_current_edit()
             self.project.set_review_status(self.current_line_id, ReviewStatus.VERIFIED)
             self.status_label.setText("Selected line marked as manually verified.")
 
@@ -1868,15 +1917,17 @@ class MainWindow(QMainWindow):
             if not Path(filename).suffix:
                 filename += suffix
             suffix = Path(filename).suffix.lower()
-            options = ExportOptions(uncertainty_markers=True)
-            {".txt": export_text, ".docx": export_docx}.get(suffix, lambda *_: None)(self.project, filename, options)
-            if suffix == ".csv":
+            if suffix == ".txt":
+                export_text(self.project, filename)
+            elif suffix == ".docx":
+                export_docx(self.project, filename)
+            elif suffix == ".csv":
                 export_csv(self.project, filename)
             elif suffix == ".xlsx":
                 export_xlsx(self.project, filename)
             elif suffix == ".json":
                 export_json(self.project, filename)
-            elif suffix not in {".txt", ".docx"}:
+            else:
                 raise ValueError(f"Unsupported export format: {suffix or selected}")
             self.status_label.setText(f"Exported {Path(filename).name}")
         except Exception as error:
@@ -1950,7 +2001,7 @@ class MainWindow(QMainWindow):
             "KurrentScholar records application stages, recoverable errors, Qt warnings, background "
             "thread failures, fatal crashes, and GUI stalls locally.\n\n"
             f"Application log:\n{log_path()}\n\n"
-            f"Crash and native-fault log:\n{log_path().parent / 'kurrentscholar-crash.log'}\n\n"
+            f"Crash and native-fault log:\n{log_path().parent / CRASH_LOG_FILE_NAME}\n\n"
             "These files may contain local filenames but never manuscript contents.",
         )
 

@@ -29,8 +29,6 @@ class ModelInstallError(RuntimeError):
 class ModelStatus:
     installed: bool
     path: Path
-    revision: str
-    bytes_required: int
     missing_files: tuple[str, ...] = ()
     invalid_files: tuple[str, ...] = ()
 
@@ -65,8 +63,6 @@ class ModelManager:
         return ModelStatus(
             not missing and not invalid and manifest_ok,
             self.root,
-            self.spec.revision,
-            self.spec.required_bytes,
             tuple(missing),
             tuple(invalid),
         )

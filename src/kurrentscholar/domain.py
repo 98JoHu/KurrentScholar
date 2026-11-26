@@ -17,7 +17,6 @@ class ConfidenceLabel(StrEnum):
 class ReviewStatus(StrEnum):
     UNREVIEWED = "unreviewed"
     VERIFIED = "verified"
-    NEEDS_REVIEW = "needs_review"
 
 
 @dataclass(frozen=True, slots=True)

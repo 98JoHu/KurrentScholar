@@ -2,25 +2,13 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 
 from kurrentscholar import __version__
 from kurrentscholar.constants import DEFAULT_MODEL, PROJECT_SCHEMA_VERSION, find_model
 from kurrentscholar.domain import ConfidenceThresholds
 from kurrentscholar.projects import ProjectDatabase
-
-
-@dataclass(frozen=True, slots=True)
-class ExportOptions:
-    corrected: bool = True
-    page_markers: bool = True
-    line_numbers: bool = False
-    uncertainty_markers: bool = False
-
-
-def _text(line, corrected: bool) -> str:
-    return line.display_text if corrected else line.machine_text
 
 
 def _safe_csv(value: object) -> object:
@@ -85,19 +73,19 @@ def _styled_segments(text: str, annotations: list[dict]) -> list[tuple[str, list
     ]
 
 
-def export_text(project: ProjectDatabase, destination: str | Path, options: ExportOptions) -> None:
+def export_text(project: ProjectDatabase, destination: str | Path) -> None:
+    """Write corrected text with page markers and an uncertainty label per line."""
+
     output: list[str] = []
     current_page = None
     thresholds = ConfidenceThresholds()
     for line in project.lines():
-        if options.page_markers and line.page_number != current_page:
+        if line.page_number != current_page:
             if output:
                 output.append("")
             output.append(f"[Page {line.page_number}]")
             current_page = line.page_number
-        prefix = f"{line.reading_order + 1}: " if options.line_numbers else ""
-        marker = f" [{thresholds.classify(line.confidence).value}]" if options.uncertainty_markers else ""
-        output.append(prefix + _text(line, options.corrected) + marker)
+        output.append(f"{line.display_text} [{thresholds.classify(line.confidence).value}]")
     Path(destination).write_text("\n".join(output) + "\n", encoding="utf-8")
 
 
@@ -136,7 +124,6 @@ def export_json(project: ProjectDatabase, destination: str | Path) -> None:
             for key, value in (project.document() or {}).items()
             if key != "source_path"
         },
-        "metadata": project.metadata(),
         "lines": [
             {
                 **asdict(line),
@@ -150,15 +137,12 @@ def export_json(project: ProjectDatabase, destination: str | Path) -> None:
     Path(destination).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def export_docx(project: ProjectDatabase, destination: str | Path, options: ExportOptions) -> None:
+def export_docx(project: ProjectDatabase, destination: str | Path) -> None:
     from docx import Document
     from docx.enum.text import WD_COLOR_INDEX
 
     document = Document()
-    document.add_heading(project.metadata().get("document_title", "Transcription"), 0)
-    for key, value in project.metadata().items():
-        if value:
-            document.add_paragraph(f"{key.replace('_', ' ').title()}: {value}")
+    document.add_heading("Transcription", 0)
     current_page = None
     thresholds = ConfidenceThresholds()
     colors = {"moderate": WD_COLOR_INDEX.YELLOW, "high_uncertainty": WD_COLOR_INDEX.DARK_YELLOW,
@@ -175,10 +159,7 @@ def export_docx(project: ProjectDatabase, destination: str | Path, options: Expo
             document.add_heading(f"Page {line.page_number}", level=1)
             current_page = line.page_number
         paragraph = document.add_paragraph()
-        if options.line_numbers:
-            paragraph.add_run(f"{line.reading_order + 1}: ")
-        text = _text(line, options.corrected)
-        for segment, segment_annotations in _styled_segments(text, line.annotations):
+        for segment, segment_annotations in _styled_segments(line.display_text, line.annotations):
             run = paragraph.add_run(segment)
             kinds = {str(annotation.get("kind")) for annotation in segment_annotations}
             run.font.superscript = "superscript" in kinds
@@ -198,10 +179,9 @@ def export_docx(project: ProjectDatabase, destination: str | Path, options: Expo
             elif "highlight" in kinds:
                 run.font.highlight_color = WD_COLOR_INDEX.YELLOW
         label = thresholds.classify(line.confidence).value
-        if options.uncertainty_markers:
-            marker = paragraph.add_run(f" [{label.replace('_', ' ')}]")
-            if label in colors:
-                marker.font.highlight_color = colors[label]
+        marker = paragraph.add_run(f" [{label.replace('_', ' ')}]")
+        if label in colors:
+            marker.font.highlight_color = colors[label]
         tags = _tag_labels(line)
         if tags:
             paragraph.add_run(f" [Tags: {tags}]").italic = True

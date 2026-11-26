@@ -1,7 +1,6 @@
-"""Document rendering, page selection, and processing orchestration."""
+"""Document rendering and page selection."""
 
 from .pages import PageRangeError, parse_page_range
-from .rendering import DocumentRenderer, RenderedPage
+from .rendering import DocumentRenderer
 
-__all__ = ["DocumentRenderer", "PageRangeError", "RenderedPage", "parse_page_range"]
-
+__all__ = ["DocumentRenderer", "PageRangeError", "parse_page_range"]

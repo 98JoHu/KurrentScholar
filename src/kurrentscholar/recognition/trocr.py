@@ -92,9 +92,7 @@ class TrOCRBackend:
         model_path: str | Path,
         device: str = "cpu",
         max_new_tokens: int = 127,
-        model_id: str = "local-trocr",
     ) -> None:
-        self.backend_id = model_id
         self.model_path = Path(model_path)
         self.device = device
         self.max_new_tokens = max_new_tokens

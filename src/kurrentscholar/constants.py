@@ -18,8 +18,6 @@ class ModelSpec:
     file_sizes: dict[str, int]
     safetensors_sha256: str
     max_new_tokens: int
-    recommended: bool = False
-    kind: str = "recognition"
     summary: str = ""
 
     @property
@@ -39,7 +37,6 @@ LEGACY_MODEL = ModelSpec(
     doi="10.57967/hf/0442",
     license="MIT",
     max_new_tokens=127,
-    recommended=True,
     summary="Best established choice for predominantly 19th-century German Kurrent.",
     file_sizes={
         "LICENSE": 1_102,
@@ -122,18 +119,6 @@ def find_model(model_id: str, revision: str) -> ModelSpec | None:
         ),
         None,
     )
-
-
-# Backwards-compatible aliases for integrations that imported the original
-# single-model constants. They describe the established default model.
-MODEL_ID = DEFAULT_MODEL.model_id
-MODEL_REVISION = DEFAULT_MODEL.revision
-MODEL_DOI = DEFAULT_MODEL.doi
-MODEL_LICENSE = DEFAULT_MODEL.license
-MODEL_REQUIRED_BYTES = DEFAULT_MODEL.required_bytes
-MODEL_FILE_SIZES = DEFAULT_MODEL.file_sizes
-MODEL_FILES = DEFAULT_MODEL.files
-MODEL_SAFETENSORS_SHA256 = DEFAULT_MODEL.safetensors_sha256
 
 
 def default_data_dir() -> Path:

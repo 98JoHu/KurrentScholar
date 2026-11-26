@@ -4,7 +4,6 @@ import sqlite3
 
 from kurrentscholar.domain import BoundingBox, ReviewStatus
 from kurrentscholar.exports import (
-    ExportOptions,
     export_csv,
     export_docx,
     export_json,
@@ -150,10 +149,10 @@ def test_exports_are_utf8_structured_and_csv_safe(tmp_path):
     table = tmp_path / "out.csv"
     word = tmp_path / "out.docx"
     excel = tmp_path / "out.xlsx"
-    export_text(project, text, ExportOptions(uncertainty_markers=True))
+    export_text(project, text)
     export_json(project, data)
     export_csv(project, table)
-    export_docx(project, word, ExportOptions(uncertainty_markers=True))
+    export_docx(project, word)
     export_xlsx(project, excel)
     assert "high_uncertainty" in text.read_text("utf-8")
     payload = json.loads(data.read_text("utf-8"))

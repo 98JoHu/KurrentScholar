@@ -14,13 +14,13 @@ Qt UI -> processing service -> renderer -> segmenter -> recognizer
 
 ## Core boundaries
 
-- `domain.py`: stable value objects (`BoundingBox`, `LineRecord`, confidence and review states).
-- `document_processing`: bounded PDF/image decoding, page selection, preprocessing, and orchestration.
-- `segmentation`: `SegmentationBackend` protocol. The included OpenCV projection backend detects
+- `domain.py`: stable value objects (`BoundingBox`, `RecognitionResult`, confidence and review states).
+- `document_processing`: bounded PDF/image decoding and page selection.
+- `segmentation`: the OpenCV projection detector, which detects
   independent ink-density peaks, separates them at projection valleys, and derives connected extents
   within each line region. It is deterministic and packageable on Windows, but not equivalent to a
   learned historical-layout model.
-- `recognition`: backend protocol, pinned model manifest/installer, and TrOCR adapter. The adapter
+- `recognition`: pinned model manifest/installer and TrOCR adapter. The adapter
   accepts only a line image, loads with `local_files_only=True` and `use_safetensors=True`, and uses
   autoregressive decoder caching without changing model weights or decoding strategy.
 - `projects`: schema-versioned SQLite. `machine_text` and model scores are never overwritten when

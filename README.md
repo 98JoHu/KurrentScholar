@@ -74,7 +74,8 @@ offline.
 - UTF-8 text, Word, formula-safe CSV, standards-compliant Excel, and provenance-rich JSON exports.
 - Verified ground-truth bundles and CER/WER evaluation for responsible external adaptation workflows.
 - Persistent application, crash, and responsiveness logs under
-  `%LOCALAPPDATA%\KurrentScholar\Logs` for troubleshooting.
+  `%LOCALAPPDATA%\KurrentScholar\Logs` (Windows) or `~/Library/Logs/KurrentScholar` (macOS) for
+  troubleshooting.
 
 ## Accuracy and research use
 

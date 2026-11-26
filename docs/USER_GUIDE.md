@@ -6,8 +6,8 @@ lines, explicit uncertainty labels, and editable text. Selecting a list row high
 Hovering over a listed transcription temporarily highlights the same source box without changing selection.
 
 At first startup, accept **Install model**; the application cannot transcribe until this one-time,
-approximately 1.34 GB download has completed and passed its integrity checks. You can defer it and use
-**Install model** later. Documents are not uploaded, and the model is used offline afterward.
+approximately 1.34 GB download has completed and passed its integrity checks. You can defer it and install it
+later from **Models > Model Manager**. Documents are not uploaded, and the model is used offline afterward.
 
 Then choose **Transcribe**. Work completed before cancellation or a later error is committed incrementally.
 A page can be opened directly with the toolbar selector or **View > Go to page…**; Previous/Next remain
@@ -18,11 +18,11 @@ this is not evidence that the page is blank. Edits are stored separately from th
 Mark a line verified only after comparison with the manuscript.
 
 **Review > Auto Save** is enabled by default and persists across launches. Turn it off if you prefer explicit
-**Ctrl+S** saves; KurrentScholar still protects the active edit before switching context or closing.
+**Ctrl+S** (macOS: **⌘S**) saves; KurrentScholar still protects the active edit before switching context or closing.
 
 Drag the divider between the line list and transcription editor to give the editor more or less height.
 The text-size control is remembered across launches. Select text and use `x²` / `x₂` (or
-**Ctrl+Shift+=** / **Ctrl+=**) for superscript and subscript. The special-character menu includes German
+**Ctrl+.** / **Ctrl+,**) for superscript and subscript. The special-character menu includes German
 letters and common archival signs; normal Unicode keyboard input is preserved. Highlight applies a visual
 mark. Tag applies a named color to a word or selection; Person, Place, Organization, Date, Unclear, and
 custom labels are available. These ranges are stored in the project and included in rich/structured
@@ -35,7 +35,7 @@ upgraded project has been checked.
 Use **Recognition model** to inspect or change the checkpoint assigned to a project. Existing projects
 retain their recorded checkpoint. Changing a processed project first creates a separate backup and then
 clears derived line results, because outputs from two models must not be mixed. Install the desired pinned
-model with **Install model** before selecting it.
+model in **Models > Model Manager** before selecting it.
 
 After correcting a representative sample, mark each completed line verified and choose **Evaluate
 corrections**. The report gives CER, WER, exact-line rate, and results by model-score band. With no verified
@@ -52,3 +52,23 @@ spreadsheet formula characters are neutralized. JSON contains model/software pro
 versions. Word preserves superscript, subscript, highlights, and tags; CSV, Excel, and JSON expose explicit
 tag/annotation fields. DOCX uncertainty is a review aid, not calibrated accuracy.
 
+## Keyboard shortcuts
+
+The same shortcuts work on Windows and macOS; on a Mac, press **⌘ Command** wherever this table says
+**Ctrl**. Menus always show the shortcut in the platform's own notation.
+
+| Action | Shortcut |
+|---|---|
+| Open document / project | Ctrl+O / Ctrl+Shift+O |
+| Previous / next page | Page Up / Page Down (Mac laptops: Fn+↑ / Fn+↓) |
+| Go to page | Ctrl+G |
+| Transcribe current page / page range | Ctrl+T / Ctrl+Shift+T |
+| Save | Ctrl+S |
+| Mark selected line verified | Ctrl+Shift+V |
+| Next uncertain line | Ctrl+Shift+N (also F6) |
+| Superscript / subscript | Ctrl+. / Ctrl+, (also Ctrl+Shift+= / Ctrl+=) |
+| Clear text formatting | Ctrl+Shift+Space (Windows also Ctrl+Space) |
+| Zoom in / out / fit page | Ctrl++ / Ctrl+- / Ctrl+0 |
+
+The period, comma, and letter keys sit in the same place on German and English keyboards, so these
+shortcuts need no extra Shift or AltGr on either layout.

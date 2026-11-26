@@ -28,6 +28,39 @@ def test_main_window_starts(qtbot):
 
 
 @pytest.mark.gui
+def test_shortcuts_are_unique_and_avoid_macos_reserved_keys(qtbot):
+    from PySide6.QtGui import QKeySequence
+
+    from kurrentscholar.ui.main_window import MainWindow
+
+    window = MainWindow(offer_model_on_startup=False)
+    qtbot.addWidget(window)
+    owners: dict[str, str] = {}
+    for name, action in window.actions.items():
+        for sequence in action.shortcuts():
+            text = sequence.toString(QKeySequence.PortableText)
+            # Two actions sharing one sequence make Qt trigger neither of them.
+            assert owners.setdefault(text, name) == name, f"{text}: {owners[text]} and {name}"
+            primary = action.shortcuts()[0].toString(QKeySequence.PortableText)
+            # Ctrl maps to Cmd on macOS, where Cmd+Space opens Spotlight.
+            assert primary != "Ctrl+Space"
+            # Bare F-keys require Fn on Mac keyboards, so they may only be secondary.
+            assert not (primary.startswith("F") and primary[1:].isdigit())
+
+
+@pytest.mark.gui
+def test_spin_box_arrow_images_exist(qtbot):
+    import re
+    from pathlib import Path
+
+    from kurrentscholar.ui.main_window import MainWindow
+
+    paths = re.findall(r'url\("([^"]+)"\)', MainWindow._spin_arrow_style())
+    assert len(paths) == 4
+    assert all(Path(path).is_file() for path in paths)
+
+
+@pytest.mark.gui
 def test_tutorial_starts_with_welcome_then_points_to_real_controls(qtbot):
     from kurrentscholar.ui.main_window import MainWindow
 
@@ -137,6 +170,39 @@ def test_hovering_transcription_highlights_matching_box(qtbot, tmp_path):
     overlay = next(item for item in window._overlays if item.data(0) == line_id)
     assert overlay.brush().color().alpha() > 0
     assert overlay.pen().width() == 3
+
+
+@pytest.mark.gui
+def test_live_line_refresh_keeps_reviewer_caret_and_edit(qtbot, tmp_path):
+    from kurrentscholar.domain import BoundingBox
+    from kurrentscholar.projects import ProjectDatabase
+    from kurrentscholar.ui.main_window import MainWindow
+
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"source")
+    project = ProjectDatabase(tmp_path / "live.ksproj", create=True)
+    project.set_document(source, 1)
+    project.upsert_page(1, 1000, 1500, 300)
+    line_id = project.add_line(1, 0, BoundingBox(10, 20, 300, 40), "erste Zeile", 0.8, [], [])
+
+    window = MainWindow(offer_model_on_startup=False)
+    qtbot.addWidget(window)
+    window.project = project
+    window._refresh_lines()
+    window.line_list.setCurrentRow(0)
+    cursor = window.editor.textCursor()
+    cursor.setPosition(5)
+    window.editor.setTextCursor(cursor)
+    window.editor.insertPlainText("!")
+
+    # A new line arriving from the transcription worker triggers a list refresh.
+    project.add_line(1, 1, BoundingBox(10, 80, 300, 40), "zweite Zeile", 0.8, [], [])
+    window._processing_line_saved(1, 0)
+
+    assert window.current_line_id == line_id
+    assert window.editor.toPlainText() == "erste! Zeile"
+    assert window.editor.textCursor().position() == 6
+    assert project.line(line_id).display_text == "erste! Zeile"
 
 
 @pytest.mark.gui
@@ -279,7 +345,7 @@ def test_model_completion_is_delivered_on_gui_thread(qtbot, monkeypatch):
 
     assert completion_threads == [True]
     assert window._install_progress is None
-    assert window.actions["Install model"].isEnabled()
+    assert window.actions["Model Manager"].isEnabled()
 
 
 @pytest.mark.gui
@@ -308,7 +374,7 @@ def test_model_failure_is_delivered_on_gui_thread(qtbot, monkeypatch):
     assert failures[0][0] is True
     assert "diagnostic failure" in failures[0][2]
     assert window._install_progress is None
-    assert window.actions["Install model"].isEnabled()
+    assert window.actions["Model Manager"].isEnabled()
 
 
 @pytest.mark.gui

@@ -10,7 +10,7 @@ content. Recognition loads with `local_files_only=True`; it does not check for u
 
 Projects contain an absolute source path and document SHA-256, so users should inspect a project before
 sharing it. Diagnostic messages and local thread-stack dumps omit source content by design but may contain
-local file and project paths. Logs remain only in `%LOCALAPPDATA%\KurrentScholar\Logs` and are never
+local file and project paths. Logs remain only in `%LOCALAPPDATA%\KurrentScholar\Logs` (macOS: `~/Library/Logs/KurrentScholar`) and are never
 uploaded automatically. Uninstalling
 the application must not remove user-created `.ksproj` files. Removing the separately installed model is
 an explicit action.

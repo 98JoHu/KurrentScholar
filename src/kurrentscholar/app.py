@@ -91,7 +91,7 @@ def main() -> int:
         return exit_code
     if arguments.smoke_test:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtCore import QTimer
+    from PySide6.QtCore import Qt, QTimer
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
@@ -99,6 +99,11 @@ def main() -> int:
 
     application = QApplication([sys.argv[0], *qt_arguments])
     install_qt_message_handler()
+    # The interface stylesheet is a light design with fixed light backgrounds. In
+    # macOS (and Windows 11) dark mode, Qt would otherwise supply light text colors,
+    # leaving lists, editors, and inputs as white-on-white. Native menus and file
+    # dialogs follow this request too, so the whole application stays consistent.
+    application.styleHints().setColorScheme(Qt.ColorScheme.Light)
     application.setApplicationName("KurrentScholar")
     application.setApplicationVersion(__version__)
     # Keep this stable: changing it moves QSettings and would hide existing

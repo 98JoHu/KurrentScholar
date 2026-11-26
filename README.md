@@ -41,7 +41,7 @@ thread count to the processors available to the application. A GPU is not requir
 - **[Download for Apple Silicon (M1 or newer)](https://github.com/98JoHu/KurrentScholar/releases/latest/download/KurrentScholar-macOS-Apple-Silicon.dmg)**
 - **[Download for Intel Mac](https://github.com/98JoHu/KurrentScholar/releases/latest/download/KurrentScholar-macOS-Intel.dmg)**
 
-Native Mac downloads start with KurrentScholar 1.1.0 and require macOS 12 or newer. They are built on the
+Native Mac downloads start with KurrentScholar 1.1.1 and require macOS 12 or newer. They are built on the
 matching processor architecture, signed with Apple Developer ID, notarized by Apple, and stapled before
 publication. If the matching DMG is absent from the latest GitHub Release, that release does not yet
 support macOS; do not use an unnotarized build from another source.
@@ -132,7 +132,7 @@ recognition model recorded in the project or export. GitHub's **Cite this reposi
   author       = {Hummel, Jonas and Lepold, Philipp},
   title        = {KurrentScholar: Offline Historical Kurrent Handwriting Transcription},
   year         = {2026},
-  version      = {1.1.0},
+  version      = {1.1.2},
   institution  = {Karlsruhe Institute of Technology (KIT)},
   url          = {https://github.com/98JoHu/KurrentScholar},
   license      = {MIT}

@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 — unreleased
+## 1.1.2 — 2026-11-26
 
 - Fixed invisible text on macOS in Dark Mode: the line list, editor, menus, and inputs rendered light text
   on the light interface. The application now requests the light color scheme and sets explicit text colors.
@@ -30,6 +30,15 @@
   now shows a message instead of leaving the window half-updated.
 - macOS DMGs include the license and third-party notices, and App Nap no longer slows transcription while
   the window is in the background.
+
+## 1.1.1 — 2026-11-24
+
+- First release with signed and notarized macOS DMGs for Apple Silicon and Intel, built natively on
+  both architectures; Windows and macOS releases can now be published concurrently.
+- CI tests every distributed platform (Windows, Apple Silicon macOS, Intel macOS).
+- Note: the 1.1.1 application still reported its version as 1.1.0.
+
+## 1.1.0 — 2026-11-23
 
 - Removed KurrentBot, its optional language model, configuration, packaging hooks, documentation, and UI
   entry points after field use showed that curated in-app help did not justify its complexity or disk use.

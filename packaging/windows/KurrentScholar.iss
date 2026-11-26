@@ -1,5 +1,5 @@
 #define MyAppName "KurrentScholar"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.1.2"
 #define MyAppPublisher "Jonas Hummel"
 #define MyAppURL "https://github.com/98JoHu/KurrentScholar"
 #define MyAppExeName "KurrentScholar.exe"

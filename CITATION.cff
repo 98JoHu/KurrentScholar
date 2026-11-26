@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use KurrentScholar, please cite this software release and the recognition model recorded in your project separately."
 title: "KurrentScholar: Offline Historical Kurrent Handwriting Transcription"
 type: software
-version: "1.1.0"
-date-released: "2026-11-21"
+version: "1.1.2"
+date-released: "2026-11-26"
 authors:
   - family-names: "Hummel"
     given-names: "Jonas"
@@ -24,7 +24,7 @@ keywords:
   - "digital humanities"
   - "TrOCR"
 abstract: >-
-  KurrentScholar is an offline-first Windows desktop application for segmenting,
+  KurrentScholar is an offline-first Windows and macOS desktop application for segmenting,
   transcribing, reviewing, and exporting historical German Kurrent manuscripts
   with local open recognition models and provenance-preserving research projects.
 
